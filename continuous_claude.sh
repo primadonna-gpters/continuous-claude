@@ -116,8 +116,13 @@ wait_for_pr_checks() {
 
     while [ $iteration -lt $max_iterations ]; do
         local checks_json
-        if ! checks_json=$(gh pr checks "$pr_number" --repo "$owner/$repo" --json state,conclusion 2>/dev/null); then
-            echo "⚠️  $iteration_display Failed to get PR checks status" >&2
+        if ! checks_json=$(gh pr checks "$pr_number" --repo "$owner/$repo" --json state,bucket 2>&1); then
+            # Check if the error is because there are no checks configured
+            if echo "$checks_json" | grep -q "no checks"; then
+                echo "✅ $iteration_display No checks configured, proceeding with merge" >&2
+                return 0
+            fi
+            echo "⚠️  $iteration_display Failed to get PR checks status: $checks_json" >&2
             return 1
         fi
 
@@ -135,14 +140,16 @@ wait_for_pr_checks() {
         local idx=0
         while [ $idx -lt $check_count ]; do
             local state=$(echo "$checks_json" | jq -r ".[$idx].state")
-            local conclusion=$(echo "$checks_json" | jq -r ".[$idx].conclusion // \"pending\"")
+            local bucket=$(echo "$checks_json" | jq -r ".[$idx].bucket // \"pending\"")
 
-            if [ "$state" != "completed" ]; then
+            # Check if the check is still in progress (not completed)
+            if [ "$bucket" = "pending" ] || [ "$bucket" = "null" ]; then
                 all_completed=false
                 break
             fi
 
-            if [ "$conclusion" != "success" ] && [ "$conclusion" != "null" ]; then
+            # Check if the check failed
+            if [ "$bucket" = "fail" ]; then
                 all_success=false
                 break
             fi

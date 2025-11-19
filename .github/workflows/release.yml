@@ -102,24 +102,6 @@ jobs:
 
           echo "✅ Updated version to $NEW_VERSION in continuous_claude.sh"
 
-      - name: Commit version bump
-        if: steps.check_version.outputs.should_release == 'true'
-        run: |
-          NEW_VERSION="${{ steps.version_bump.outputs.new_version }}"
-
-          # Configure git
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Stage and commit changes
-          git add continuous_claude.sh
-          git commit -m ":bookmark: Release version $NEW_VERSION"
-
-          # Push to main
-          git push origin main
-
-          echo "✅ Committed and pushed version bump to main"
-
       - name: Generate release notes
         id: release_notes
         if: steps.check_version.outputs.should_release == 'true'
@@ -161,6 +143,77 @@ jobs:
 
           echo "Release notes generated"
           cat release_notes.md
+
+      - name: Generate CHANGELOG
+        if: steps.check_version.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NEW_VERSION="${{ steps.version_bump.outputs.new_version }}"
+          
+          # Check if CHANGELOG.md exists
+          if [ ! -f CHANGELOG.md ]; then
+            echo "Creating new CHANGELOG.md..."
+            echo "# Changelog" > CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            
+            # Fetch all releases using gh cli
+            # We need to be careful about API limits if there are many releases, but for now let's try fetching all
+            # We sort by publishedAt desc
+            gh release list --limit 1000 --json tagName,publishedAt,name,body --template '{{range .}}{{printf "## [%s] - %s\n\n%s\n\n" .tagName (.publishedAt | time "2006-01-02") .body}}{{end}}' >> CHANGELOG.md
+          fi
+          
+          # Prepend new release notes to CHANGELOG.md
+          # We need to construct the new entry
+          DATE=$(date +%Y-%m-%d)
+          
+          # Create a temporary file for the new entry
+          cat > new_entry.md << EOF
+          ## [$NEW_VERSION] - $DATE
+
+          EOF
+          
+          # Append the body from release_notes.md (skipping the title if it's redundant, but our release_notes.md has headers)
+          # Our release_notes.md starts with "## What's Changed". 
+          # Let's just dump the whole release_notes.md content into the changelog entry for now.
+          cat release_notes.md >> new_entry.md
+          echo "" >> new_entry.md
+          
+          # If CHANGELOG.md exists (which it should now), we need to insert new_entry.md after the header
+          # Assuming the first line is "# Changelog"
+          
+          # Create a temp file with the header
+          echo "# Changelog" > temp_changelog.md
+          echo "" >> temp_changelog.md
+          
+          # Add the new entry
+          cat new_entry.md >> temp_changelog.md
+          
+          # Add the rest of the existing changelog (skipping the first 2 lines: header and empty line)
+          tail -n +3 CHANGELOG.md >> temp_changelog.md || true
+          
+          # Replace CHANGELOG.md
+          mv temp_changelog.md CHANGELOG.md
+          
+          echo "✅ Updated CHANGELOG.md"
+
+      - name: Commit version bump
+        if: steps.check_version.outputs.should_release == 'true'
+        run: |
+          NEW_VERSION="${{ steps.version_bump.outputs.new_version }}"
+
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Stage and commit changes
+          git add continuous_claude.sh CHANGELOG.md
+          git commit -m ":bookmark: Release version $NEW_VERSION"
+
+          # Push to main
+          git push origin main
+
+          echo "✅ Committed and pushed version bump to main"
 
       - name: Create Release
         if: steps.check_version.outputs.should_release == 'true'

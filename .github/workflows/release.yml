@@ -159,7 +159,7 @@ jobs:
             
             # Fetch all releases using gh api (because gh release list doesn't return body)
             # We use jq to format the output
-            gh api repos/${{ github.repository }}/releases --paginate | jq -r '.[] | "## [" + .tag_name + "] - " + (.published_at | split("T")[0]) + "\n\n" + (.body // "") + "\n\n"' >> CHANGELOG.md
+            gh api repos/${{ github.repository }}/releases --paginate | jq -r '.[] | "## [" + .tag_name + "] - " + (.published_at | split("T")[0]) + "\n\n" + ((.body // "") | gsub("## "; "### ")) + "\n\n"' >> CHANGELOG.md
           fi
           
           # Prepend new release notes to CHANGELOG.md
@@ -175,7 +175,8 @@ jobs:
           # Append the body from release_notes.md (skipping the title if it's redundant, but our release_notes.md has headers)
           # Our release_notes.md starts with "## What's Changed". 
           # Let's just dump the whole release_notes.md content into the changelog entry for now.
-          cat release_notes.md >> new_entry.md
+          # Replace ## with ### to maintain proper header hierarchy
+          sed 's/^## /### /' release_notes.md >> new_entry.md
           echo "" >> new_entry.md
           
           # If CHANGELOG.md exists (which it should now), we need to insert new_entry.md after the header

@@ -1,5 +1,29 @@
 # CHANGELOG
 
+## [v0.8.5] - 2025-11-20
+
+### What's Changed
+
+- :bug: Enhance error handling in run_claude_iteration (64e8386)
+
+**Full Changelog**: https://github.com/AnandChowdhary/continuous-claude/compare/v0.8.4...v0.8.5
+
+### Installation
+
+Install with a single command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AnandChowdhary/continuous-claude/refs/tags/v0.8.5/install.sh | bash
+```
+
+Or download the script directly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AnandChowdhary/continuous-claude/refs/tags/v0.8.5/continuous_claude.sh -o continuous-claude
+chmod +x continuous-claude
+sudo mv continuous-claude /usr/local/bin/
+```
+
 ## [v0.8.4] - 2025-11-20
 
 ### What's Changed

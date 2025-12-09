@@ -1,4 +1,4 @@
-# ![Continuous Claude](https://github.com/user-attachments/assets/52f7faaf-893c-4b2f-8d90-49808193b247)
+<h1><img width="512" height="294" alt="Continuous Claude" src="https://github.com/user-attachments/assets/26878379-6cff-4803-a50d-c1e3f9455f55" /></h1>
 
 <details data-embed="anandchowdhary.com" data-title="Continuous Claude" data-summary="Run Claude Code in a loop repeatedly to do large projects">
   <summary>Automated workflow that orchestrates Claude Code in a continuous loop, autonomously creating PRs, waiting for checks, and merging - so multi-step projects complete while you sleep.</summary>
@@ -271,4 +271,4 @@ Here's what a successful run looks like:
 
 ## 📃 License
 
-MIT ©️ [Anand Chowdhary](https://anandchowdhary.com)
+[MIT](./LICENSE) ©️ [Anand Chowdhary](https://anandchowdhary.com)

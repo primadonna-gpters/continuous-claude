@@ -368,7 +368,7 @@ ${prompt}
     local iteration=0
     while [[ $iteration -lt $max_runs ]]; do
         iteration=$((iteration + 1))
-        increment_agent_iteration "$agent_id"
+        increment_iteration "$agent_id"
 
         echo "🔄 [${agent_id}] Iteration ${iteration}/${max_runs}"
 

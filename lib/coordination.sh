@@ -180,26 +180,40 @@ run_parallel() {
     local prompt="$1"
     local agents="${2:-planner developer tester reviewer}"
     local max_runs="${3:-5}"
+    local branch_name="continuous-claude/swarm-${SWARM_SESSION_ID}"
 
     echo "⚡ Running in PARALLEL mode"
     echo "   Flow: planner → (developer ∥ tester) → reviewer"
     echo ""
 
+    # Create a working branch for the swarm
+    if git rev-parse --git-dir > /dev/null 2>&1; then
+        echo "🌿 Creating swarm branch: ${branch_name}"
+        git checkout -b "$branch_name" 2>/dev/null || git checkout "$branch_name" 2>/dev/null || true
+    fi
+
     # 1. Planner runs first (others depend on the plan)
     echo "═══════════════════════════════════════════════════════════════"
     echo "  Phase 1: Planning"
     echo "═══════════════════════════════════════════════════════════════"
-    execute_agent "planner" "$prompt" "$max_runs"
+    local planner_prompt
+    planner_prompt=$(build_agent_prompt "planner" "$prompt")
+    execute_agent "planner" "$planner_prompt" "$max_runs"
 
     # 2. Developer and tester run in parallel
     echo ""
     echo "═══════════════════════════════════════════════════════════════"
     echo "  Phase 2: Development & Testing (parallel)"
     echo "═══════════════════════════════════════════════════════════════"
-    (execute_agent "developer" "$prompt" "$max_runs") &
+
+    local dev_prompt tester_prompt
+    dev_prompt=$(build_agent_prompt "developer" "$prompt")
+    tester_prompt=$(build_agent_prompt "tester" "$prompt")
+
+    (execute_agent "developer" "$dev_prompt" "$max_runs") &
     local dev_pid=$!
 
-    (execute_agent "tester" "Write tests for: $prompt" "$max_runs") &
+    (execute_agent "tester" "$tester_prompt" "$max_runs") &
     local test_pid=$!
 
     # Wait for both to complete
@@ -211,7 +225,14 @@ run_parallel() {
     echo "═══════════════════════════════════════════════════════════════"
     echo "  Phase 3: Review"
     echo "═══════════════════════════════════════════════════════════════"
-    execute_agent "reviewer" "Review the code changes for: $prompt" "$max_runs"
+    local reviewer_prompt
+    reviewer_prompt=$(build_agent_prompt "reviewer" "$prompt")
+    execute_agent "reviewer" "$reviewer_prompt" "$max_runs"
+
+    # Create PR if we have changes
+    if git rev-parse --git-dir > /dev/null 2>&1; then
+        create_swarm_pr "$branch_name" "$prompt"
+    fi
 }
 
 # Run in adaptive mode (dynamically adjust based on progress)
@@ -498,6 +519,17 @@ run_agent_pipeline() {
     local prompt="$1"
     local agents="$2"
     local max_runs="${3:-5}"
+    local branch_name="continuous-claude/swarm-${SWARM_SESSION_ID}"
+    local notes_file="SHARED_TASK_NOTES.md"
+
+    # Create a working branch for the swarm
+    if git rev-parse --git-dir > /dev/null 2>&1; then
+        local main_branch
+        main_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
+
+        echo "🌿 Creating swarm branch: ${branch_name}"
+        git checkout -b "$branch_name" 2>/dev/null || git checkout "$branch_name" 2>/dev/null || true
+    fi
 
     for agent_id in $agents; do
         echo ""
@@ -505,11 +537,176 @@ run_agent_pipeline() {
         echo "  Starting: ${agent_id}"
         echo "═══════════════════════════════════════════════════════════════"
 
-        execute_agent "$agent_id" "$prompt" "$max_runs"
+        # Build agent-specific prompt based on role
+        local agent_prompt
+        agent_prompt=$(build_agent_prompt "$agent_id" "$prompt")
+
+        execute_agent "$agent_id" "$agent_prompt" "$max_runs"
 
         # Show dashboard after each agent
         print_coordination_dashboard
     done
+
+    # Create PR if we have changes
+    if git rev-parse --git-dir > /dev/null 2>&1; then
+        create_swarm_pr "$branch_name" "$prompt"
+    fi
+}
+
+# Build role-specific prompt for each agent
+# Usage: build_agent_prompt <agent_id> <base_prompt>
+build_agent_prompt() {
+    local agent_id="$1"
+    local base_prompt="$2"
+    local notes_file="SHARED_TASK_NOTES.md"
+
+    case "$agent_id" in
+        planner)
+            echo "## PLANNING TASK
+
+Analyze the following request and create a detailed implementation plan:
+
+${base_prompt}
+
+Your deliverables:
+1. Break down the task into specific implementation steps
+2. Identify files that need to be created or modified
+3. Define acceptance criteria for each step
+4. Document any dependencies or considerations
+
+Write your plan to ${notes_file} so the Developer agent can follow it."
+            ;;
+        developer)
+            echo "## DEVELOPMENT TASK
+
+Implement the feature/fix based on the plan in ${notes_file}:
+
+Original request: ${base_prompt}
+
+Your responsibilities:
+1. Read the plan from ${notes_file}
+2. Implement the code changes step by step
+3. Follow the acceptance criteria defined in the plan
+4. Update ${notes_file} with what you completed and any issues found
+5. Commit your changes with descriptive messages
+
+Do NOT write tests - the Tester agent will handle that."
+            ;;
+        tester)
+            echo "## TESTING TASK
+
+Write tests for the implementation documented in ${notes_file}:
+
+Original request: ${base_prompt}
+
+Your responsibilities:
+1. Read ${notes_file} to understand what was implemented
+2. Write comprehensive tests (unit tests, integration tests as needed)
+3. Run the tests and ensure they pass
+4. Update ${notes_file} with test coverage information
+5. If tests fail, document the failures for the Developer
+
+Do NOT fix implementation bugs - document them in ${notes_file} for the Developer."
+            ;;
+        reviewer)
+            echo "## CODE REVIEW TASK
+
+Review the code changes and prepare for PR:
+
+Original request: ${base_prompt}
+
+Your responsibilities:
+1. Read ${notes_file} to understand the implementation and tests
+2. Review the code for quality, security, and best practices
+3. Check that all acceptance criteria are met
+4. Update ${notes_file} with your review summary
+5. If changes are needed, document them clearly
+
+If everything looks good, add 'APPROVED_FOR_MERGE' to ${notes_file}."
+            ;;
+        *)
+            # Default: use base prompt
+            echo "${base_prompt}"
+            ;;
+    esac
+}
+
+# Create a PR for the swarm work
+# Usage: create_swarm_pr <branch_name> <prompt>
+create_swarm_pr() {
+    local branch_name="$1"
+    local prompt="$2"
+    local notes_file="SHARED_TASK_NOTES.md"
+
+    # Check if there are any commits to push
+    local main_branch
+    main_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
+
+    local commit_count
+    commit_count=$(git rev-list --count "${main_branch}..HEAD" 2>/dev/null || echo "0")
+
+    if [[ "$commit_count" -eq 0 ]]; then
+        echo "⚠️  No commits to create PR"
+        return 0
+    fi
+
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  Creating Pull Request"
+    echo "═══════════════════════════════════════════════════════════════"
+
+    # Push the branch
+    echo "📤 Pushing branch: ${branch_name}"
+    git push -u origin "$branch_name" 2>/dev/null || {
+        echo "⚠️  Failed to push branch"
+        return 1
+    }
+
+    # Get PR body from notes file if exists
+    local pr_body="## Summary
+
+This PR was created by Continuous Claude Swarm.
+
+**Original Task:** ${prompt}
+
+"
+    if [[ -f "$notes_file" ]]; then
+        pr_body+="## Implementation Notes
+
+\`\`\`
+$(cat "$notes_file")
+\`\`\`
+"
+    fi
+
+    pr_body+="
+---
+🤖 Generated with [Continuous Claude](https://github.com/primadonna-gpters/continuous-claude)"
+
+    # Create PR using gh CLI
+    if command -v gh &>/dev/null; then
+        local pr_url
+        pr_url=$(gh pr create \
+            --title "🤖 ${prompt:0:60}" \
+            --body "$pr_body" \
+            --base "$main_branch" \
+            --head "$branch_name" 2>&1) || {
+            echo "⚠️  Failed to create PR: $pr_url"
+            return 1
+        }
+        echo "✅ PR created: ${pr_url}"
+
+        # Auto-merge if enabled
+        if [[ "$AUTO_MERGE" == "true" ]]; then
+            echo "🔀 Auto-merge enabled, merging PR..."
+            gh pr merge "$pr_url" --squash --delete-branch || {
+                echo "⚠️  Auto-merge failed"
+            }
+        fi
+    else
+        echo "⚠️  gh CLI not found. Please create PR manually:"
+        echo "   gh pr create --base $main_branch --head $branch_name"
+    fi
 }
 
 # =============================================================================

@@ -20,6 +20,7 @@ source "${SCRIPT_DIR}/orchestrator.sh"
 
 COORDINATION_MODE="${COORDINATION_MODE:-pipeline}"  # pipeline, parallel, adaptive
 AUTO_MERGE="${AUTO_MERGE:-false}"
+VERBOSE="${VERBOSE:-false}"  # Show real-time agent output
 
 # =============================================================================
 # Workflow Definitions
@@ -437,7 +438,19 @@ This file helps coordinate work across iterations. It should:
         local temp_stderr=$(mktemp)
         local exit_code=0
 
-        claude --dangerously-skip-permissions --output-format json -p "$full_prompt" >"$temp_stdout" 2>"$temp_stderr" || exit_code=$?
+        if [[ "$VERBOSE" == "true" ]]; then
+            # Verbose mode: stream output in real-time using tee
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "📺 [${agent_id}] Live output:"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            claude --dangerously-skip-permissions --output-format json -p "$full_prompt" 2>&1 | tee "$temp_stdout" || exit_code=$?
+            # Copy stdout to temp_stderr for completion signal check
+            cp "$temp_stdout" "$temp_stderr"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        else
+            # Normal mode: capture output silently
+            claude --dangerously-skip-permissions --output-format json -p "$full_prompt" >"$temp_stdout" 2>"$temp_stderr" || exit_code=$?
+        fi
 
         if [[ $exit_code -eq 0 ]]; then
             echo "✅ [${agent_id}] Iteration ${iteration} complete"
@@ -449,8 +462,8 @@ This file helps coordinate work across iterations. It should:
                 echo "   💰 Cost: \$${cost}"
             fi
 
-            # Show last few lines of stderr (Claude's conversation output)
-            if [[ -s "$temp_stderr" ]]; then
+            # Show last few lines of stderr (Claude's conversation output) - only in non-verbose mode
+            if [[ "$VERBOSE" != "true" && -s "$temp_stderr" ]]; then
                 echo "   📝 Output (last 5 lines):"
                 tail -5 "$temp_stderr" | sed 's/^/      /'
             fi

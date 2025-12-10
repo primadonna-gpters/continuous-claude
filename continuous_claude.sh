@@ -1753,9 +1753,10 @@ handle_swarm_command() {
 
     local prompt=""
     local mode="pipeline"
-    local agents="developer tester reviewer"
+    local agents="planner developer tester reviewer"
     local auto_merge="false"
     local max_runs="5"
+    local verbose="false"
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -1779,6 +1780,10 @@ handle_swarm_command() {
                 auto_merge="true"
                 shift
                 ;;
+            -v|--verbose)
+                verbose="true"
+                shift
+                ;;
             --status)
                 print_coordination_dashboard
                 exit 0
@@ -1791,9 +1796,10 @@ handle_swarm_command() {
                 echo "Options:"
                 echo "  -p, --prompt <text>    Task prompt (required)"
                 echo "  -m, --mode <mode>      Coordination mode: pipeline, parallel, adaptive (default: pipeline)"
-                echo "  -a, --agents <list>    Space-separated agent list (default: 'developer tester reviewer')"
+                echo "  -a, --agents <list>    Space-separated agent list (default: 'planner developer tester reviewer')"
                 echo "  -r, --max-runs <num>   Max iterations per agent (default: 5)"
                 echo "  --auto-merge           Auto-merge PRs when approved"
+                echo "  -v, --verbose          Show real-time agent output"
                 echo "  --status               Show current swarm status and exit"
                 echo "  -h, --help             Show this help message"
                 echo ""
@@ -1801,6 +1807,7 @@ handle_swarm_command() {
                 echo "  continuous-claude swarm -p 'Build auth system' -m pipeline"
                 echo "  continuous-claude swarm -p 'Add tests' -a 'developer tester' -r 3"
                 echo "  continuous-claude swarm -p 'Build feature' --auto-merge"
+                echo "  continuous-claude swarm -p 'Build feature' -v  # verbose output"
                 exit 0
                 ;;
             *)
@@ -1818,6 +1825,7 @@ handle_swarm_command() {
     fi
 
     export AUTO_MERGE="$auto_merge"
+    export VERBOSE="$verbose"
     run_swarm "$prompt" "$mode" "$agents" "$max_runs"
 }
 

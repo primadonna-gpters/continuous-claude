@@ -487,9 +487,22 @@ run_agent_pipeline() {
         echo "⚠️  Not in a git repo, continuing without branch"
     fi
 
+    # Create Draft PR immediately (PR updates as agents push commits)
+    local pr_url=""
+    if [[ -n "$branch_name" ]]; then
+        pr_url=$(create_draft_pr "$branch_name" "$prompt")
+        if [[ -n "$pr_url" ]]; then
+            echo ""
+            echo "📋 PR URL: ${pr_url}"
+            echo "   (This PR will update as agents work)"
+            echo ""
+        fi
+    fi
+
     # Phase 1: Planning
     if [[ "$agents" == *"planner"* ]]; then
         run_agent_phase "planner" "$prompt" "$max_runs" "Phase 1: Planning"
+        push_agent_changes "planner"
     fi
 
     # Phase 2: Development & Testing Loop
@@ -507,12 +520,14 @@ run_agent_pipeline() {
         # Developer phase
         if [[ "$agents" == *"developer"* ]]; then
             run_agent_phase "developer" "$prompt" "$max_runs" "Phase 2: Development"
+            push_agent_changes "developer"
         fi
 
         # Tester phase
         if [[ "$agents" == *"tester"* ]]; then
             run_agent_phase "tester" "$prompt" "$max_runs" "Phase 3: Testing"
             local tester_result=$?
+            push_agent_changes "tester"
 
             if [[ $tester_result -eq 2 ]]; then
                 echo "🐛 Bugs found, cycling back to developer..."
@@ -529,13 +544,12 @@ run_agent_pipeline() {
         echo "⚠️  Max bug fix cycles reached, proceeding anyway"
     fi
 
-    # Phase 4: Create PR (before reviewer)
-    local pr_url=""
-    if [[ -n "$branch_name" ]]; then
-        pr_url=$(create_swarm_pr "$branch_name" "$prompt")
+    # Mark PR ready for review (remove draft status)
+    if [[ -n "$pr_url" ]]; then
+        mark_pr_ready_for_review "$pr_url" "$prompt"
     fi
 
-    # Phase 5: Review (reviews the actual PR)
+    # Phase 4: Review (reviews the existing PR)
     if [[ "$agents" == *"reviewer"* ]]; then
         local reviewer_prompt
         reviewer_prompt=$(build_agent_prompt "reviewer" "$prompt" "$pr_url")
@@ -544,6 +558,9 @@ run_agent_pipeline() {
 
     echo ""
     echo "🎉 Pipeline completed!"
+    if [[ -n "$pr_url" ]]; then
+        echo "📋 PR: ${pr_url}"
+    fi
 }
 
 # Run a single agent phase with nice output
@@ -723,24 +740,40 @@ EOF
             ;;
         reviewer)
             local pr_section=""
+            local pr_commands=""
             if [[ -n "$pr_url" ]]; then
                 pr_section="
 ## Pull Request to Review
-${pr_url}
+**URL:** ${pr_url}
 
-Use 'gh pr view ${pr_url}' to see the PR details.
-Use 'gh pr diff ${pr_url}' to see the code changes.
+This PR has been created and updated by the previous agents (planner, developer, tester).
+"
+                pr_commands="
+## Useful Commands
+\`\`\`bash
+# View PR details
+gh pr view ${pr_url}
+
+# View code changes
+gh pr diff ${pr_url}
+
+# Approve the PR (when satisfied)
+gh pr review ${pr_url} --approve
+
+# Request changes
+gh pr review ${pr_url} --request-changes --body 'Your feedback here'
+\`\`\`
 "
             fi
             cat << EOF
 # 👁️ REVIEWER AGENT TASK
 
 ## Your Mission
-Review the code changes and provide feedback.
+Review the code changes in the Pull Request and either approve or request changes.
 ${pr_section}
 ## Original Request
 ${base_prompt}
-
+${pr_commands}
 ## Review Checklist
 1. **Code Quality**: Clean, readable, follows best practices
 2. **Security**: No vulnerabilities, proper input validation
@@ -749,10 +782,10 @@ ${base_prompt}
 5. **Acceptance Criteria**: All requirements from plan are met
 
 ## Instructions
-1. Read ${notes_file} for context
-2. Review the code changes
-3. Check test results
-4. Provide constructive feedback
+1. Read ${notes_file} for context of what was implemented
+2. Use 'gh pr diff' to review the actual code changes
+3. Check test results from tester notes
+4. Either APPROVE or REQUEST CHANGES using gh pr review
 
 ## Output to ${notes_file}
 \`\`\`markdown
@@ -769,8 +802,9 @@ ${base_prompt}
 - Positive point 2
 \`\`\`
 
-If approved, include 'APPROVED_FOR_MERGE' and 'AGENT_TASK_COMPLETE'.
-If changes needed, document them clearly.
+## Final Actions
+- If approved: Run 'gh pr review --approve' and include 'APPROVED_FOR_MERGE' and 'AGENT_TASK_COMPLETE'
+- If changes needed: Run 'gh pr review --request-changes' and document issues clearly
 EOF
             ;;
         *)
@@ -779,54 +813,148 @@ EOF
     esac
 }
 
-# Create a PR for the swarm work
-# Usage: create_swarm_pr <branch_name> <prompt>
+# Create a Draft PR at the start of the swarm
+# Usage: create_draft_pr <branch_name> <prompt>
 # Returns: PR URL (echoed to stdout)
-create_swarm_pr() {
+create_draft_pr() {
     local branch_name="$1"
     local prompt="$2"
     local notes_file="SHARED_TASK_NOTES.md"
 
-    # Check if there are any commits to push
     local main_branch
     main_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
     main_branch="${main_branch:-main}"
 
-    local commit_count
-    commit_count=$(git rev-list --count "${main_branch}..HEAD" 2>/dev/null || echo "0")
-
-    if [[ "$commit_count" -eq 0 ]]; then
-        echo "⚠️  No commits to create PR" >&2
-        return 0
-    fi
-
     echo "" >&2
     echo "═══════════════════════════════════════════════════════════════" >&2
-    echo "  Creating Pull Request" >&2
+    echo "  Creating Draft Pull Request" >&2
     echo "═══════════════════════════════════════════════════════════════" >&2
+
+    # Create initial placeholder file to enable PR
+    if [[ ! -f "$notes_file" ]]; then
+        cat > "$notes_file" << 'INIT_EOF'
+# Swarm Task Notes
+
+> This file is used for agent communication and will be updated throughout the process.
+
+## Status: In Progress
+
+Agents are working on this task...
+INIT_EOF
+        git add "$notes_file"
+        git commit -m "🚀 Initialize swarm task
+
+Session: ${SWARM_SESSION_ID}
+Task: ${prompt:0:60}" 2>/dev/null || true
+    fi
 
     # Push the branch
     echo "📤 Pushing branch: ${branch_name}" >&2
-    if ! git push -u origin "$branch_name" 2>/dev/null; then
+    if ! git push -u origin "$branch_name" 2>&1; then
         echo "⚠️  Failed to push branch" >&2
         return 1
     fi
 
     # Build PR body
+    local pr_body="## 🚧 Work In Progress
+
+This PR is being worked on by Continuous Claude Swarm.
+
+**Task:** ${prompt}
+
+**Session:** \`${SWARM_SESSION_ID}\`
+
+---
+
+### Progress
+
+| Phase | Agent | Status |
+|-------|-------|--------|
+| Planning | 📋 Planner | ⏳ Pending |
+| Development | 🧑‍💻 Developer | ⏳ Pending |
+| Testing | 🧪 Tester | ⏳ Pending |
+| Review | 👁️ Reviewer | ⏳ Pending |
+
+---
+🤖 Generated with [Continuous Claude](https://github.com/primadonna-gpters/continuous-claude)"
+
+    # Create Draft PR using gh CLI
+    if command -v gh &>/dev/null; then
+        local pr_url
+        pr_url=$(gh pr create \
+            --title "🚧 [WIP] ${prompt:0:50}" \
+            --body "$pr_body" \
+            --base "$main_branch" \
+            --head "$branch_name" \
+            --draft 2>/dev/null)
+
+        if [[ -n "$pr_url" ]]; then
+            echo "✅ Draft PR created: ${pr_url}" >&2
+            export SWARM_PR_URL="$pr_url"
+            echo "$pr_url"
+            return 0
+        else
+            echo "⚠️  Failed to create PR" >&2
+            return 1
+        fi
+    else
+        echo "⚠️  gh CLI not found. Please create PR manually:" >&2
+        echo "   gh pr create --draft --base $main_branch --head $branch_name" >&2
+        return 1
+    fi
+}
+
+# Push agent changes after each phase
+# Usage: push_agent_changes <agent_id>
+push_agent_changes() {
+    local agent_id="$1"
+
+    # Check if there are changes to push
+    if git diff --quiet HEAD @{u} 2>/dev/null; then
+        return 0  # Nothing to push
+    fi
+
+    echo "📤 Pushing ${agent_id} changes..." >&2
+    if git push 2>/dev/null; then
+        echo "✅ Changes pushed" >&2
+        return 0
+    else
+        echo "⚠️  Failed to push changes" >&2
+        return 1
+    fi
+}
+
+# Mark PR as ready for review (remove draft status)
+# Usage: mark_pr_ready_for_review <pr_url> <prompt>
+mark_pr_ready_for_review() {
+    local pr_url="$1"
+    local prompt="$2"
+    local notes_file="SHARED_TASK_NOTES.md"
+
+    if [[ -z "$pr_url" ]]; then
+        return 1
+    fi
+
+    echo "" >&2
+    echo "═══════════════════════════════════════════════════════════════" >&2
+    echo "  Marking PR Ready for Review" >&2
+    echo "═══════════════════════════════════════════════════════════════" >&2
+
+    # Update PR title and body
     local pr_body="## Summary
 
 This PR was created by Continuous Claude Swarm.
 
-**Original Task:** ${prompt}
+**Task:** ${prompt}
 
-**Session:** ${SWARM_SESSION_ID}
+**Session:** \`${SWARM_SESSION_ID}\`
 "
     if [[ -f "$notes_file" ]]; then
         pr_body+="
 ## Implementation Notes
 
 <details>
-<summary>Click to expand</summary>
+<summary>Click to expand task notes</summary>
 
 \`\`\`markdown
 $(cat "$notes_file")
@@ -840,29 +968,17 @@ $(cat "$notes_file")
 ---
 🤖 Generated with [Continuous Claude](https://github.com/primadonna-gpters/continuous-claude)"
 
-    # Create PR using gh CLI
+    # Mark as ready for review
     if command -v gh &>/dev/null; then
-        local pr_url
-        pr_url=$(gh pr create \
+        gh pr ready "$pr_url" 2>/dev/null || true
+        gh pr edit "$pr_url" \
             --title "🤖 ${prompt:0:60}" \
-            --body "$pr_body" \
-            --base "$main_branch" \
-            --head "$branch_name" 2>/dev/null)
-
-        if [[ -n "$pr_url" ]]; then
-            echo "✅ PR created: ${pr_url}" >&2
-            # Return PR URL to stdout for capture
-            echo "$pr_url"
-            return 0
-        else
-            echo "⚠️  Failed to create PR" >&2
-            return 1
-        fi
-    else
-        echo "⚠️  gh CLI not found. Please create PR manually:" >&2
-        echo "   gh pr create --base $main_branch --head $branch_name" >&2
-        return 1
+            --body "$pr_body" 2>/dev/null || true
+        echo "✅ PR marked ready for review" >&2
+        return 0
     fi
+
+    return 1
 }
 
 # =============================================================================

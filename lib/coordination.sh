@@ -351,12 +351,21 @@ ${persona_prompt}
 ## TASK
 ${prompt}
 
-## INSTRUCTIONS
+## CRITICAL INSTRUCTIONS
+- DO NOT ask questions. Just do the work.
+- DO NOT wait for confirmation. Proceed with reasonable defaults.
 - Focus on your specific role as ${agent_id}
-- Coordinate with other agents via messages if needed
-- Update SHARED_TASK_NOTES.md with progress"
+- Make progress on the task immediately
+- Update SHARED_TASK_NOTES.md with what you accomplished
+- If the task is complete, include 'CONTINUOUS_CLAUDE_PROJECT_COMPLETE' in your response"
     else
-        full_prompt="$prompt"
+        full_prompt="${prompt}
+
+## CRITICAL INSTRUCTIONS
+- DO NOT ask questions. Just do the work.
+- DO NOT wait for confirmation. Proceed with reasonable defaults.
+- Make progress on the task immediately
+- If the task is complete, include 'CONTINUOUS_CLAUDE_PROJECT_COMPLETE' in your response"
     fi
 
     echo "🤖 [${agent_id}] Starting agent execution..."
@@ -372,14 +381,14 @@ ${prompt}
 
         echo "🔄 [${agent_id}] Iteration ${iteration}/${max_runs}"
 
-        # Run claude with the prompt
+        # Run claude with the prompt (--dangerously-skip-permissions for non-interactive)
         local output
-        if output=$(claude --dangerously-skip-permissions -p "$full_prompt" 2>&1); then
+        if output=$(claude --dangerously-skip-permissions --verbose -p "$full_prompt" 2>&1); then
             echo "✅ [${agent_id}] Iteration ${iteration} complete"
-            echo "$output" | tail -5
+            echo "$output" | tail -10
         else
             echo "❌ [${agent_id}] Iteration ${iteration} failed"
-            echo "$output" | tail -5
+            echo "$output" | tail -10
         fi
 
         # Check for completion signal

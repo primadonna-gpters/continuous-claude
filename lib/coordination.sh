@@ -20,7 +20,7 @@ source "${SCRIPT_DIR}/orchestrator.sh"
 
 COORDINATION_MODE="${COORDINATION_MODE:-pipeline}"  # pipeline, parallel, adaptive
 AUTO_MERGE="${AUTO_MERGE:-false}"
-VERBOSE="${VERBOSE:-false}"  # Show real-time agent output
+# Note: VERBOSE is set by the caller (continuous_claude.sh) via export
 
 # =============================================================================
 # Workflow Definitions

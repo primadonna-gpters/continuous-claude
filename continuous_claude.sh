@@ -1749,6 +1749,7 @@ handle_swarm_command() {
         exit 1
     fi
 
+    # Source early for --status and other commands that need it immediately
     source "${LIB_DIR}/coordination.sh"
 
     local prompt=""
@@ -1826,6 +1827,7 @@ handle_swarm_command() {
 
     export AUTO_MERGE="$auto_merge"
     export VERBOSE="$verbose"
+
     run_swarm "$prompt" "$mode" "$agents" "$max_runs"
 }
 

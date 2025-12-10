@@ -7,7 +7,8 @@
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DASHBOARD_DIR="${SCRIPT_DIR}/../dashboard"
+# Support environment variable from install.sh wrapper, fallback to relative path
+DASHBOARD_DIR="${CONTINUOUS_CLAUDE_DASHBOARD_DIR:-${SCRIPT_DIR}/../dashboard}"
 DASHBOARD_PID_FILE="${TMPDIR:-/tmp}/continuous-claude-dashboard.pid"
 DASHBOARD_LOG_FILE="${TMPDIR:-/tmp}/continuous-claude-dashboard.log"
 DEFAULT_DASHBOARD_PORT="${DASHBOARD_PORT:-8000}"

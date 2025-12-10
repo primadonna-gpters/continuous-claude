@@ -91,12 +91,75 @@ done
 
 echo -e "${GREEN}✅ Personas installed to $LIB_INSTALL_DIR/personas/${NC}"
 
+# Download dashboard backend
+echo ""
+echo "📥 Downloading dashboard backend..."
+
+DASHBOARD_BACKEND_FILES=(
+    "main.py"
+    "pyproject.toml"
+    "db/__init__.py"
+    "db/database.py"
+    "db/models.py"
+    "models/__init__.py"
+    "models/schemas.py"
+    "routes/__init__.py"
+    "routes/agents.py"
+    "routes/tasks.py"
+    "routes/websocket.py"
+)
+
+mkdir -p "$LIB_INSTALL_DIR/dashboard/backend/db"
+mkdir -p "$LIB_INSTALL_DIR/dashboard/backend/models"
+mkdir -p "$LIB_INSTALL_DIR/dashboard/backend/routes"
+
+for file in "${DASHBOARD_BACKEND_FILES[@]}"; do
+    echo "   Downloading dashboard/backend/$file..."
+    if ! curl -fsSL "$REPO_URL/dashboard/backend/$file" -o "$LIB_INSTALL_DIR/dashboard/backend/$file" 2>/dev/null; then
+        echo -e "${YELLOW}   ⚠️  Could not download dashboard/backend/$file${NC}"
+    fi
+done
+
+echo -e "${GREEN}✅ Dashboard backend installed to $LIB_INSTALL_DIR/dashboard/backend/${NC}"
+
+# Download dashboard frontend
+echo ""
+echo "📥 Downloading dashboard frontend..."
+
+DASHBOARD_FRONTEND_FILES=(
+    "package.json"
+    "svelte.config.js"
+    "tsconfig.json"
+    "vite.config.ts"
+    "src/app.css"
+    "src/app.html"
+    "src/routes/+layout.svelte"
+    "src/routes/+page.svelte"
+    "src/lib/components/AgentCard.svelte"
+    "src/lib/components/LogStream.svelte"
+    "src/lib/stores/dashboard.ts"
+)
+
+mkdir -p "$LIB_INSTALL_DIR/dashboard/frontend/src/routes"
+mkdir -p "$LIB_INSTALL_DIR/dashboard/frontend/src/lib/components"
+mkdir -p "$LIB_INSTALL_DIR/dashboard/frontend/src/lib/stores"
+
+for file in "${DASHBOARD_FRONTEND_FILES[@]}"; do
+    echo "   Downloading dashboard/frontend/$file..."
+    if ! curl -fsSL "$REPO_URL/dashboard/frontend/$file" -o "$LIB_INSTALL_DIR/dashboard/frontend/$file" 2>/dev/null; then
+        echo -e "${YELLOW}   ⚠️  Could not download dashboard/frontend/$file${NC}"
+    fi
+done
+
+echo -e "${GREEN}✅ Dashboard frontend installed to $LIB_INSTALL_DIR/dashboard/frontend/${NC}"
+
 # Update the script to point to the correct lib directory
 # Create a wrapper that sets LIB_DIR
 WRAPPER_CONTENT="#!/bin/bash
 # Continuous Claude wrapper - sets library path
 export CONTINUOUS_CLAUDE_LIB_DIR=\"$LIB_INSTALL_DIR/lib\"
 export CONTINUOUS_CLAUDE_PERSONAS_DIR=\"$LIB_INSTALL_DIR/personas\"
+export CONTINUOUS_CLAUDE_DASHBOARD_DIR=\"$LIB_INSTALL_DIR/dashboard\"
 exec \"$INSTALL_DIR/.continuous-claude-core\" \"\$@\"
 "
 

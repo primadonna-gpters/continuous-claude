@@ -100,8 +100,19 @@ continuous-claude/
 
 **워크플로우:**
 ```
-브랜치 생성 → Draft PR → planner → developer → tester → (버그 루프) → PR Ready → reviewer
+브랜치 생성 → Draft PR → planner → [developer → tester → (버그 루프)]
+                                   ↓
+                              reviewer
+                                   ↓
+                   (승인) → PR Ready → 머지
+                   (변경요청) → 다시 developer로 ↩
 ```
+
+**주요 시그널:**
+- `AGENT_TASK_COMPLETE` - 에이전트 작업 완료
+- `BUGS_FOUND` - 테스터가 버그 발견 → developer로 회귀
+- `REVIEW_APPROVED` - 리뷰어 승인 → PR Ready
+- `REVIEW_CHANGES_REQUESTED` - 리뷰어 변경 요청 → developer로 회귀
 
 ### 3.2 orchestrator.sh
 
@@ -311,7 +322,11 @@ persona:
 | `planner` | 요구사항 분석, 계획 수립 | developer |
 | `developer` | 코드 구현 | tester |
 | `tester` | 테스트 작성/실행 | reviewer (통과) / developer (실패) |
-| `reviewer` | 코드 리뷰, PR 승인 | merge |
+| `reviewer` | 코드 리뷰, PR 승인 | merge (승인) / developer (변경요청) |
+
+**리뷰어 시그널:**
+- `REVIEW_APPROVED` - 코드 승인, PR Ready로 마킹
+- `REVIEW_CHANGES_REQUESTED` - 변경 필요, developer로 회귀
 
 ---
 
@@ -324,7 +339,8 @@ persona:
 ├── state/
 │   ├── session.json        # 세션 정보
 │   ├── agents.json         # 에이전트 상태
-│   └── tasks.json          # 태스크 큐
+│   ├── tasks.json          # 태스크 큐
+│   └── activity.log        # 실시간 활동 로그 (대시보드용)
 ├── messages/
 │   ├── inbox/<agent>/      # 수신 메시지
 │   └── outbox/             # 발신 대기

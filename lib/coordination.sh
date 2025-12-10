@@ -239,9 +239,86 @@ get_coordination_status() {
 }
 
 # Print coordination dashboard
-print_coordination_dashboard() {
-    clear 2>/dev/null || true
+# Print a compact status line (for real-time updates during execution)
+# Usage: print_status_line <agent_id> <status> [extra_info]
+print_status_line() {
+    local agent_id="$1"
+    local status="$2"
+    local extra="${3:-}"
+    local timestamp
+    timestamp=$(date +"%H:%M:%S")
 
+    local emoji
+    case "$agent_id" in
+        planner) emoji="📋" ;;
+        developer) emoji="🧑‍💻" ;;
+        tester) emoji="🧪" ;;
+        reviewer) emoji="👁️" ;;
+        *) emoji="🤖" ;;
+    esac
+
+    local status_icon
+    case "$status" in
+        running) status_icon="🟢" ;;
+        waiting) status_icon="🟡" ;;
+        complete) status_icon="✅" ;;
+        error) status_icon="❌" ;;
+        *) status_icon="⚪" ;;
+    esac
+
+    if [[ -n "$extra" ]]; then
+        printf "[%s] %s %s %-10s %s %s\n" "$timestamp" "$status_icon" "$emoji" "$agent_id" "$status" "$extra"
+    else
+        printf "[%s] %s %s %-10s %s\n" "$timestamp" "$status_icon" "$emoji" "$agent_id" "$status"
+    fi
+}
+
+# Print pipeline progress bar
+# Usage: print_pipeline_progress <current_phase> <review_cycle> <bug_cycle>
+print_pipeline_progress() {
+    local current_phase="$1"
+    local review_cycle="${2:-1}"
+    local bug_cycle="${3:-1}"
+
+    echo ""
+    echo "┌─────────────────────────────────────────────────────────────────┐"
+
+    local plan_icon dev_icon test_icon review_icon
+    case "$current_phase" in
+        planner)
+            plan_icon="🔄" dev_icon="⏳" test_icon="⏳" review_icon="⏳" ;;
+        developer)
+            plan_icon="✅" dev_icon="🔄" test_icon="⏳" review_icon="⏳" ;;
+        tester)
+            plan_icon="✅" dev_icon="✅" test_icon="🔄" review_icon="⏳" ;;
+        reviewer)
+            plan_icon="✅" dev_icon="✅" test_icon="✅" review_icon="🔄" ;;
+        complete)
+            plan_icon="✅" dev_icon="✅" test_icon="✅" review_icon="✅" ;;
+        *)
+            plan_icon="⏳" dev_icon="⏳" test_icon="⏳" review_icon="⏳" ;;
+    esac
+
+    printf "│ %s Plan → %s Dev → %s Test → %s Review" "$plan_icon" "$dev_icon" "$test_icon" "$review_icon"
+    if [[ $review_cycle -gt 1 ]]; then
+        printf " (cycle %d)" "$review_cycle"
+    fi
+    printf "              │\n"
+
+    if [[ $bug_cycle -gt 1 ]]; then
+        printf "│ 🐛 Bug fix cycle: %d/3                                          │\n" "$bug_cycle"
+    fi
+
+    echo "└─────────────────────────────────────────────────────────────────┘"
+}
+
+print_coordination_dashboard() {
+    # Don't clear screen if in verbose mode (to preserve streaming output)
+    if [[ "$VERBOSE" != "true" ]]; then
+        clear 2>/dev/null || true
+    fi
+
+    echo ""
     echo "╔═══════════════════════════════════════════════════════════════╗"
     echo "║            🐝 CONTINUOUS CLAUDE SWARM DASHBOARD               ║"
     echo "╠═══════════════════════════════════════════════════════════════╣"
@@ -252,9 +329,14 @@ print_coordination_dashboard() {
     session_id=$(echo "$session" | jq -r '.session_id // "N/A"')
     local status
     status=$(echo "$session" | jq -r '.status // "N/A"')
+    local pr_url
+    pr_url=$(echo "$session" | jq -r '.pr_url // ""')
 
     printf "║ Session: %-20s Mode: %-20s ║\n" "$session_id" "$COORDINATION_MODE"
     printf "║ Status: %-21s Auto-Merge: %-15s ║\n" "$status" "$AUTO_MERGE"
+    if [[ -n "$pr_url" && "$pr_url" != "null" ]]; then
+        printf "║ PR: %-55s ║\n" "${pr_url:0:55}"
+    fi
     echo "╠═══════════════════════════════════════════════════════════════╣"
 
     # Agent Status
@@ -264,12 +346,11 @@ print_coordination_dashboard() {
     local agents_state
     agents_state=$(get_all_agents_state)
 
-    for agent_id in $(echo "$agents_state" | jq -r 'keys[]' | sort); do
-        local agent_status emoji iteration unread
+    for agent_id in $(echo "$agents_state" | jq -r 'keys[]' 2>/dev/null | sort); do
+        local agent_status emoji iteration
         agent_status=$(echo "$agents_state" | jq -r --arg id "$agent_id" '.[$id].status // "?"')
         emoji=$(echo "$agents_state" | jq -r --arg id "$agent_id" '.[$id].emoji // "?"')
         iteration=$(echo "$agents_state" | jq -r --arg id "$agent_id" '.[$id].iteration // 0')
-        unread=$(get_unread_count "$agent_id")
 
         local status_icon
         case "$agent_status" in
@@ -277,11 +358,12 @@ print_coordination_dashboard() {
             waiting) status_icon="🟡" ;;
             registered) status_icon="⚪" ;;
             stopped) status_icon="🔴" ;;
+            complete) status_icon="✅" ;;
             *) status_icon="⚫" ;;
         esac
 
-        printf "║ %s %s %-10s  %s %-12s  Iter: %-3s  📬 %-3s        ║\n" \
-            "$status_icon" "$emoji" "$agent_id" " " "$agent_status" "$iteration" "$unread"
+        printf "║ %s %s %-10s  %-15s  Iterations: %-3s           ║\n" \
+            "$status_icon" "$emoji" "$agent_id" "$agent_status" "$iteration"
     done
 
     echo "╠═══════════════════════════════════════════════════════════════╣"
@@ -290,10 +372,10 @@ print_coordination_dashboard() {
     local task_summary
     task_summary=$(get_task_queue_summary)
     local pending in_progress completed failed
-    pending=$(echo "$task_summary" | jq -r '.pending')
-    in_progress=$(echo "$task_summary" | jq -r '.in_progress')
-    completed=$(echo "$task_summary" | jq -r '.completed')
-    failed=$(echo "$task_summary" | jq -r '.failed')
+    pending=$(echo "$task_summary" | jq -r '.pending // 0')
+    in_progress=$(echo "$task_summary" | jq -r '.in_progress // 0')
+    completed=$(echo "$task_summary" | jq -r '.completed // 0')
+    failed=$(echo "$task_summary" | jq -r '.failed // 0')
 
     echo "║                       TASK QUEUE                              ║"
     echo "╟───────────────────────────────────────────────────────────────╢"
@@ -302,22 +384,38 @@ print_coordination_dashboard() {
 
     echo "╠═══════════════════════════════════════════════════════════════╣"
 
-    # Conflicts
-    local conflicts
-    conflicts=$(detect_all_conflicts)
-    local conflict_count
-    conflict_count=$(echo "$conflicts" | jq 'length')
-
-    echo "║                      CONFLICTS                                ║"
+    # Recent Activity (last 3 log entries)
+    echo "║                     RECENT ACTIVITY                           ║"
     echo "╟───────────────────────────────────────────────────────────────╢"
 
-    if [[ "$conflict_count" -gt 0 ]]; then
-        echo "$conflicts" | jq -r '.[] | "║   ⚠️  \(.agents | join(" vs ")) on \(.files | join(", "))"' | head -3
+    local state_dir=".continuous-claude/state"
+    if [[ -f "${state_dir}/activity.log" ]]; then
+        tail -3 "${state_dir}/activity.log" 2>/dev/null | while read -r line; do
+            printf "║   %-59s ║\n" "${line:0:59}"
+        done
     else
-        echo "║   ✅ No conflicts detected                                    ║"
+        echo "║   No recent activity                                          ║"
     fi
 
     echo "╚═══════════════════════════════════════════════════════════════╝"
+}
+
+# Log activity for dashboard
+# Usage: log_activity <message>
+log_activity() {
+    local message="$1"
+    local state_dir=".continuous-claude/state"
+    local timestamp
+    timestamp=$(date +"%H:%M:%S")
+
+    mkdir -p "$state_dir"
+    echo "[${timestamp}] ${message}" >> "${state_dir}/activity.log"
+
+    # Keep only last 50 lines
+    if [[ -f "${state_dir}/activity.log" ]]; then
+        tail -50 "${state_dir}/activity.log" > "${state_dir}/activity.log.tmp" 2>/dev/null
+        mv "${state_dir}/activity.log.tmp" "${state_dir}/activity.log" 2>/dev/null
+    fi
 }
 
 # =============================================================================
@@ -328,16 +426,21 @@ print_coordination_dashboard() {
 AGENT_TASK_COMPLETE="AGENT_TASK_COMPLETE"
 PROJECT_COMPLETE="CONTINUOUS_CLAUDE_PROJECT_COMPLETE"
 
+# Reviewer signals
+REVIEW_APPROVED="REVIEW_APPROVED"
+REVIEW_CHANGES_REQUESTED="REVIEW_CHANGES_REQUESTED"
+
 # Run a single agent iteration with Claude Code
 # Usage: execute_agent <agent_id> <prompt> [max_runs]
-# Returns: 0 on success, 1 on failure, 2 if bugs found (for tester)
+# Returns: 0 on success, 1 on failure, 2 if bugs found (tester), 3 if changes requested (reviewer)
 execute_agent() {
     local agent_id="$1"
     local prompt="$2"
     local max_runs="${3:-5}"
     local notes_file="SHARED_TASK_NOTES.md"
 
-    echo "🤖 [${agent_id}] Starting agent execution..."
+    echo "🤖 [${agent_id}] Starting agent execution... (verbose=${VERBOSE:-not set})"
+    log_activity "[${agent_id}] Starting execution"
 
     # Update agent state
     update_agent_state "$agent_id" "running"
@@ -354,6 +457,7 @@ execute_agent() {
         increment_iteration "$agent_id"
 
         echo "🔄 [${agent_id}] Iteration ${iteration}/${max_runs}"
+        log_activity "[${agent_id}] Iteration ${iteration}/${max_runs}"
 
         # Build the full prompt with notes context
         local full_prompt
@@ -366,11 +470,12 @@ execute_agent() {
 
         if [[ "$VERBOSE" == "true" ]]; then
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "📺 [${agent_id}] Live output (streaming):"
+            echo "📺 [${agent_id}] Live output:"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            # Use text format for human-readable real-time streaming
-            claude --dangerously-skip-permissions --output-format text -p "$full_prompt" 2>&1 | tee "$temp_stdout" || exit_code=$?
-            cp "$temp_stdout" "$temp_stderr"
+            # Run claude and display output in real-time using tee
+            claude --dangerously-skip-permissions -p "$full_prompt" 2>&1 | tee "$temp_stdout"
+            exit_code=${PIPESTATUS[0]}
+            cp "$temp_stdout" "$temp_stderr" 2>/dev/null || true
             echo ""
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         else
@@ -404,6 +509,7 @@ execute_agent() {
         # Check for task completion signal (agent finished its work)
         if grep -q "$AGENT_TASK_COMPLETE" "$temp_stdout" "$temp_stderr" 2>/dev/null; then
             echo "✅ [${agent_id}] Agent completed its task"
+            log_activity "[${agent_id}] Task completed"
             rm -f "$temp_stdout" "$temp_stderr"
             break
         fi
@@ -411,6 +517,7 @@ execute_agent() {
         # Check for project completion signal
         if grep -q "$PROJECT_COMPLETE" "$temp_stdout" "$temp_stderr" 2>/dev/null; then
             echo "🎉 [${agent_id}] Project complete signal detected"
+            log_activity "[${agent_id}] Project complete"
             rm -f "$temp_stdout" "$temp_stderr"
             break
         fi
@@ -419,7 +526,23 @@ execute_agent() {
         if [[ "$agent_id" == "tester" ]]; then
             if grep -q "BUGS_FOUND" "$temp_stdout" "$temp_stderr" 2>/dev/null; then
                 echo "🐛 [${agent_id}] Bugs found - will need developer fix"
+                log_activity "[${agent_id}] Bugs found"
                 agent_result=2
+            fi
+        fi
+
+        # Check reviewer decision (special handling)
+        if [[ "$agent_id" == "reviewer" ]]; then
+            if grep -q "$REVIEW_CHANGES_REQUESTED" "$temp_stdout" "$temp_stderr" 2>/dev/null; then
+                echo "📝 [${agent_id}] Changes requested - will need developer fix"
+                log_activity "[${agent_id}] Requested changes"
+                agent_result=3
+                rm -f "$temp_stdout" "$temp_stderr"
+                break
+            elif grep -q "$REVIEW_APPROVED" "$temp_stdout" "$temp_stderr" 2>/dev/null; then
+                echo "✅ [${agent_id}] PR approved for merge"
+                log_activity "[${agent_id}] Approved PR"
+                agent_result=0
             fi
         fi
 
@@ -494,7 +617,7 @@ Example: '${agent_emoji} [${agent_id}] Add user authentication module'"
 }
 
 # Run agents in sequence (pipeline)
-# Workflow: planner → developer → tester → (loop if bugs) → PR → reviewer
+# Workflow: planner → developer → tester → (loop if bugs) → reviewer → (loop if changes requested) → PR ready
 # Usage: run_agent_pipeline <prompt> <agents> [max_runs]
 run_agent_pipeline() {
     local prompt="$1"
@@ -502,6 +625,7 @@ run_agent_pipeline() {
     local max_runs="${3:-5}"
     local notes_file="SHARED_TASK_NOTES.md"
     local max_bug_fix_cycles=3
+    local max_review_cycles=3
 
     # Create a working branch for the swarm
     local branch_name
@@ -516,8 +640,8 @@ run_agent_pipeline() {
         pr_url=$(create_draft_pr "$branch_name" "$prompt")
         if [[ -n "$pr_url" ]]; then
             echo ""
-            echo "📋 PR URL: ${pr_url}"
-            echo "   (This PR will update as agents work)"
+            echo "📋 PR URL: ${pr_url} (Draft)"
+            echo "   (PR will be marked Ready when reviewer approves)"
             echo ""
         fi
     fi
@@ -528,60 +652,103 @@ run_agent_pipeline() {
         push_agent_changes "planner"
     fi
 
-    # Phase 2: Development & Testing Loop
-    local bug_fix_cycle=0
-    local bugs_found=true
+    # Main Development → Test → Review Loop
+    local review_cycle=0
+    local changes_requested=true
+    local review_approved=false
 
-    while [[ "$bugs_found" == "true" && $bug_fix_cycle -lt $max_bug_fix_cycles ]]; do
-        bug_fix_cycle=$((bug_fix_cycle + 1))
+    while [[ "$changes_requested" == "true" && $review_cycle -lt $max_review_cycles ]]; do
+        review_cycle=$((review_cycle + 1))
 
-        if [[ $bug_fix_cycle -gt 1 ]]; then
+        if [[ $review_cycle -gt 1 ]]; then
             echo ""
-            echo "🔁 Bug fix cycle ${bug_fix_cycle}/${max_bug_fix_cycles}"
+            echo "╔═══════════════════════════════════════════════════════════════╗"
+            echo "║  🔄 Review Feedback Cycle ${review_cycle}/${max_review_cycles}                               ║"
+            echo "╚═══════════════════════════════════════════════════════════════╝"
         fi
 
-        # Developer phase
-        if [[ "$agents" == *"developer"* ]]; then
-            run_agent_phase "developer" "$prompt" "$max_runs" "Phase 2: Development"
-            push_agent_changes "developer"
-        fi
+        # Phase 2: Development & Testing Loop (inner loop for bugs)
+        local bug_fix_cycle=0
+        local bugs_found=true
 
-        # Tester phase
-        if [[ "$agents" == *"tester"* ]]; then
-            run_agent_phase "tester" "$prompt" "$max_runs" "Phase 3: Testing"
-            local tester_result=$?
-            push_agent_changes "tester"
+        while [[ "$bugs_found" == "true" && $bug_fix_cycle -lt $max_bug_fix_cycles ]]; do
+            bug_fix_cycle=$((bug_fix_cycle + 1))
 
-            if [[ $tester_result -eq 2 ]]; then
-                echo "🐛 Bugs found, cycling back to developer..."
-                bugs_found=true
+            if [[ $bug_fix_cycle -gt 1 ]]; then
+                echo ""
+                echo "🔁 Bug fix cycle ${bug_fix_cycle}/${max_bug_fix_cycles}"
+            fi
+
+            # Developer phase
+            if [[ "$agents" == *"developer"* ]]; then
+                local phase_label="Phase 2: Development"
+                if [[ $review_cycle -gt 1 ]]; then
+                    phase_label="Phase 2: Development (addressing review feedback)"
+                fi
+                run_agent_phase "developer" "$prompt" "$max_runs" "$phase_label"
+                push_agent_changes "developer"
+            fi
+
+            # Tester phase
+            if [[ "$agents" == *"tester"* ]]; then
+                run_agent_phase "tester" "$prompt" "$max_runs" "Phase 3: Testing"
+                local tester_result=$?
+                push_agent_changes "tester"
+
+                if [[ $tester_result -eq 2 ]]; then
+                    echo "🐛 Bugs found, cycling back to developer..."
+                    bugs_found=true
+                else
+                    bugs_found=false
+                fi
             else
                 bugs_found=false
             fi
+        done
+
+        if [[ $bug_fix_cycle -ge $max_bug_fix_cycles && "$bugs_found" == "true" ]]; then
+            echo "⚠️  Max bug fix cycles reached, proceeding to review anyway"
+        fi
+
+        # Phase 4: Review (reviewer decides if approved or changes needed)
+        if [[ "$agents" == *"reviewer"* ]]; then
+            local reviewer_prompt
+            reviewer_prompt=$(build_agent_prompt "reviewer" "$prompt" "$pr_url")
+            run_agent_phase "reviewer" "$reviewer_prompt" "$max_runs" "Phase 4: Code Review"
+            local reviewer_result=$?
+            push_agent_changes "reviewer"
+
+            if [[ $reviewer_result -eq 3 ]]; then
+                echo ""
+                echo "📝 Reviewer requested changes - cycling back to developer..."
+                changes_requested=true
+            else
+                echo ""
+                echo "✅ Reviewer approved the changes!"
+                changes_requested=false
+                review_approved=true
+            fi
         else
-            bugs_found=false
+            changes_requested=false
+            review_approved=true
         fi
     done
 
-    if [[ $bug_fix_cycle -ge $max_bug_fix_cycles && "$bugs_found" == "true" ]]; then
-        echo "⚠️  Max bug fix cycles reached, proceeding anyway"
+    if [[ $review_cycle -ge $max_review_cycles && "$changes_requested" == "true" ]]; then
+        echo "⚠️  Max review cycles reached, proceeding to finalize"
     fi
 
-    # Mark PR ready for review (remove draft status)
-    if [[ -n "$pr_url" ]]; then
+    # Mark PR ready for review ONLY after reviewer approves
+    if [[ -n "$pr_url" && "$review_approved" == "true" ]]; then
         mark_pr_ready_for_review "$pr_url" "$prompt"
     fi
 
-    # Phase 4: Review (reviews the existing PR)
-    if [[ "$agents" == *"reviewer"* ]]; then
-        local reviewer_prompt
-        reviewer_prompt=$(build_agent_prompt "reviewer" "$prompt" "$pr_url")
-        run_agent_phase "reviewer" "$reviewer_prompt" "$max_runs" "Phase 4: Code Review"
-        push_agent_changes "reviewer"
-    fi
-
     echo ""
-    echo "🎉 Pipeline completed!"
+    if [[ "$review_approved" == "true" ]]; then
+        echo "🎉 Pipeline completed successfully!"
+    else
+        echo "⚠️  Pipeline completed (review not fully approved)"
+    fi
     if [[ -n "$pr_url" ]]; then
         echo "📋 PR: ${pr_url}"
     fi
@@ -600,11 +767,25 @@ run_agent_phase() {
     echo "  ${phase_name}: ${agent_id}"
     echo "═══════════════════════════════════════════════════════════════"
 
+    # Log activity
+    log_activity "${phase_name} started"
+
     local agent_prompt
     agent_prompt=$(build_agent_prompt "$agent_id" "$prompt")
 
     execute_agent "$agent_id" "$agent_prompt" "$max_runs"
     local result=$?
+
+    # Log completion
+    if [[ $result -eq 0 ]]; then
+        log_activity "${phase_name} completed"
+    elif [[ $result -eq 2 ]]; then
+        log_activity "${phase_name} found bugs"
+    elif [[ $result -eq 3 ]]; then
+        log_activity "${phase_name} requested changes"
+    else
+        log_activity "${phase_name} failed"
+    fi
 
     print_coordination_dashboard
     return $result
@@ -827,8 +1008,14 @@ ${pr_commands}
 \`\`\`
 
 ## Final Actions
-- If approved: Run 'gh pr review --approve' and include 'APPROVED_FOR_MERGE' and 'AGENT_TASK_COMPLETE'
-- If changes needed: Run 'gh pr review --request-changes' and document issues clearly
+- If approved: Run 'gh pr review --approve' and include 'REVIEW_APPROVED' and 'AGENT_TASK_COMPLETE' in your response
+- If changes needed: Run 'gh pr review --request-changes --body "..."' and include 'REVIEW_CHANGES_REQUESTED' in your response
+  - Clearly describe what needs to be fixed in ${notes_file}
+  - The developer will receive your feedback and make corrections
+
+**IMPORTANT:** You MUST include exactly one of these signals in your response:
+- 'REVIEW_APPROVED' - when the code is ready to merge
+- 'REVIEW_CHANGES_REQUESTED' - when the developer needs to make changes
 EOF
             ;;
         *)

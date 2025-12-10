@@ -463,13 +463,32 @@ $(cat "$notes_file")"
     fi
 
     # Add critical instructions
+    local agent_emoji=""
+    case "$agent_id" in
+        planner) agent_emoji="📋" ;;
+        developer) agent_emoji="🧑‍💻" ;;
+        tester) agent_emoji="🧪" ;;
+        reviewer) agent_emoji="👁️" ;;
+        *) agent_emoji="🤖" ;;
+    esac
+
     full_prompt+="
 
 ## CRITICAL INSTRUCTIONS
 - DO NOT ask questions. Proceed with reasonable defaults.
 - DO NOT wait for confirmation. Just do the work.
 - When your task is complete, include '${AGENT_TASK_COMPLETE}' in your response.
-- Update ${notes_file} with your progress and any important notes for the next agent."
+- Update ${notes_file} with your progress and any important notes for the next agent.
+
+## COMMIT MESSAGE FORMAT
+When committing changes, use this format:
+\`\`\`
+${agent_emoji} [${agent_id}] <short description>
+
+<detailed description if needed>
+\`\`\`
+
+Example: '${agent_emoji} [${agent_id}] Add user authentication module'"
 
     echo "$full_prompt"
 }
@@ -558,6 +577,7 @@ run_agent_pipeline() {
         local reviewer_prompt
         reviewer_prompt=$(build_agent_prompt "reviewer" "$prompt" "$pr_url")
         run_agent_phase "reviewer" "$reviewer_prompt" "$max_runs" "Phase 4: Code Review"
+        push_agent_changes "reviewer"
     fi
 
     echo ""

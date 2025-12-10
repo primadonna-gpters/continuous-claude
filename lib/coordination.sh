@@ -854,23 +854,24 @@ create_draft_pr() {
     echo "  Creating Draft Pull Request" >&2
     echo "═══════════════════════════════════════════════════════════════" >&2
 
-    # Create initial placeholder file to enable PR
-    if [[ ! -f "$notes_file" ]]; then
-        cat > "$notes_file" << 'INIT_EOF'
+    # Create initial commit for PR (always create/update notes file)
+    cat > "$notes_file" << EOF
 # Swarm Task Notes
 
-> This file is used for agent communication and will be updated throughout the process.
+> Session: ${SWARM_SESSION_ID}
+
+## Task
+${prompt}
 
 ## Status: In Progress
 
 Agents are working on this task...
-INIT_EOF
-        git add "$notes_file"
-        git commit -m "🚀 Initialize swarm task
+EOF
+    git add "$notes_file"
+    git commit -m "🚀 [swarm] Initialize task
 
 Session: ${SWARM_SESSION_ID}
 Task: ${prompt:0:60}" 2>/dev/null || true
-    fi
 
     # Push the branch
     echo "📤 Pushing branch: ${branch_name}" >&2
@@ -906,21 +907,38 @@ This PR is being worked on by Continuous Claude Swarm.
 
     # Create Draft PR using gh CLI
     if command -v gh &>/dev/null; then
+        echo "📝 Creating draft PR..." >&2
         local pr_url
+        local pr_error
+        pr_error=$(mktemp)
+
         pr_url=$(gh pr create \
             --title "🚧 [WIP] ${prompt:0:50}" \
             --body "$pr_body" \
             --base "$main_branch" \
             --head "$branch_name" \
-            --draft 2>/dev/null)
+            --draft 2>"$pr_error")
 
         if [[ -n "$pr_url" ]]; then
             echo "✅ Draft PR created: ${pr_url}" >&2
             export SWARM_PR_URL="$pr_url"
+            rm -f "$pr_error"
             echo "$pr_url"
             return 0
         else
-            echo "⚠️  Failed to create PR" >&2
+            echo "⚠️  Failed to create PR:" >&2
+            cat "$pr_error" >&2
+            rm -f "$pr_error"
+
+            # Check if PR already exists
+            local existing_pr
+            existing_pr=$(gh pr list --head "$branch_name" --json url --jq '.[0].url' 2>/dev/null)
+            if [[ -n "$existing_pr" ]]; then
+                echo "📋 Using existing PR: ${existing_pr}" >&2
+                export SWARM_PR_URL="$existing_pr"
+                echo "$existing_pr"
+                return 0
+            fi
             return 1
         fi
     else

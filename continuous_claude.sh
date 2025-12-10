@@ -1755,6 +1755,7 @@ handle_swarm_command() {
     local mode="pipeline"
     local agents="developer tester reviewer"
     local auto_merge="false"
+    local max_runs="5"
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -1768,6 +1769,10 @@ handle_swarm_command() {
                 ;;
             -a|--agents)
                 agents="$2"
+                shift 2
+                ;;
+            -r|--max-runs)
+                max_runs="$2"
                 shift 2
                 ;;
             --auto-merge)
@@ -1787,13 +1792,15 @@ handle_swarm_command() {
                 echo "  -p, --prompt <text>    Task prompt (required)"
                 echo "  -m, --mode <mode>      Coordination mode: pipeline, parallel, adaptive (default: pipeline)"
                 echo "  -a, --agents <list>    Space-separated agent list (default: 'developer tester reviewer')"
+                echo "  -r, --max-runs <num>   Max iterations per agent (default: 5)"
                 echo "  --auto-merge           Auto-merge PRs when approved"
                 echo "  --status               Show current swarm status and exit"
                 echo "  -h, --help             Show this help message"
                 echo ""
                 echo "Examples:"
                 echo "  continuous-claude swarm -p 'Build auth system' -m pipeline"
-                echo "  continuous-claude swarm -p 'Add tests' -a 'developer tester' --auto-merge"
+                echo "  continuous-claude swarm -p 'Add tests' -a 'developer tester' -r 3"
+                echo "  continuous-claude swarm -p 'Build feature' --auto-merge"
                 exit 0
                 ;;
             *)
@@ -1811,7 +1818,7 @@ handle_swarm_command() {
     fi
 
     export AUTO_MERGE="$auto_merge"
-    run_swarm "$prompt" "$mode" "$agents"
+    run_swarm "$prompt" "$mode" "$agents" "$max_runs"
 }
 
 # Handle "dashboard" subcommand - Dashboard Management

@@ -159,53 +159,60 @@ on_review_complete() {
 # =============================================================================
 
 # Run in pipeline mode (sequential)
-# Usage: run_pipeline <prompt>
+# Usage: run_pipeline <prompt> [agents] [max_runs]
 run_pipeline() {
     local prompt="$1"
+    local agents="${2:-developer tester reviewer}"
+    local max_runs="${3:-5}"
 
     echo "🔄 Running in PIPELINE mode"
-    echo "   Flow: developer → tester → reviewer"
+    echo "   Flow: ${agents// / → }"
     echo ""
 
-    # Initialize swarm
-    init_swarm "developer tester reviewer" "$prompt"
-
-    # Distribute initial task to developer
-    distribute_initial_tasks "$prompt"
+    # Execute agents in sequence
+    run_agent_pipeline "$prompt" "$agents" "$max_runs"
 }
 
 # Run in parallel mode (concurrent where possible)
-# Usage: run_parallel <prompt>
+# Usage: run_parallel <prompt> [agents] [max_runs]
 run_parallel() {
     local prompt="$1"
+    local agents="${2:-developer tester reviewer}"
+    local max_runs="${3:-5}"
 
     echo "⚡ Running in PARALLEL mode"
-    echo "   Developer and Tester can work concurrently"
+    echo "   Agents will run concurrently (where possible)"
     echo ""
 
-    # Initialize swarm
-    init_swarm "developer tester reviewer" "$prompt"
+    # For now, run developer and tester in parallel, then reviewer
+    # Run developer and tester in background
+    (execute_agent "developer" "$prompt" "$max_runs") &
+    local dev_pid=$!
 
-    # Start both developer and tester
-    start_agent "developer"
-    start_agent "tester"
+    (execute_agent "tester" "Write tests for: $prompt" "$max_runs") &
+    local test_pid=$!
 
-    # Add tasks for both
-    add_task "implementation" "developer" "$prompt" 1
-    add_task "test_planning" "tester" "Plan tests for: $prompt" 2
+    # Wait for both to complete
+    echo "⏳ Waiting for developer and tester to complete..."
+    wait $dev_pid $test_pid
+
+    # Then run reviewer sequentially
+    execute_agent "reviewer" "Review the code changes for: $prompt" "$max_runs"
 }
 
 # Run in adaptive mode (dynamically adjust based on progress)
-# Usage: run_adaptive <prompt>
+# Usage: run_adaptive <prompt> [agents] [max_runs]
 run_adaptive() {
     local prompt="$1"
+    local agents="${2:-developer tester reviewer}"
+    local max_runs="${3:-5}"
 
     echo "🧠 Running in ADAPTIVE mode"
     echo "   Will adjust strategy based on progress"
     echo ""
 
-    # Start as pipeline, can switch to parallel if no conflicts
-    run_pipeline "$prompt"
+    # Start as pipeline mode
+    run_pipeline "$prompt" "$agents" "$max_runs"
 }
 
 # =============================================================================
@@ -321,6 +328,95 @@ print_coordination_dashboard() {
 }
 
 # =============================================================================
+# Agent Execution
+# =============================================================================
+
+# Run a single agent iteration with Claude Code
+# Usage: execute_agent <agent_id> <prompt> [max_runs]
+execute_agent() {
+    local agent_id="$1"
+    local prompt="$2"
+    local max_runs="${3:-5}"
+
+    # Get persona prompt
+    local persona_prompt
+    persona_prompt=$(get_persona_prompt "$agent_id" 2>/dev/null || echo "")
+
+    # Build full prompt with persona context
+    local full_prompt
+    if [[ -n "$persona_prompt" ]]; then
+        full_prompt="## AGENT ROLE
+${persona_prompt}
+
+## TASK
+${prompt}
+
+## INSTRUCTIONS
+- Focus on your specific role as ${agent_id}
+- Coordinate with other agents via messages if needed
+- Update SHARED_TASK_NOTES.md with progress"
+    else
+        full_prompt="$prompt"
+    fi
+
+    echo "🤖 [${agent_id}] Starting agent execution..."
+
+    # Update agent state
+    update_agent_state "$agent_id" "running"
+
+    # Run Claude Code
+    local iteration=0
+    while [[ $iteration -lt $max_runs ]]; do
+        iteration=$((iteration + 1))
+        increment_agent_iteration "$agent_id"
+
+        echo "🔄 [${agent_id}] Iteration ${iteration}/${max_runs}"
+
+        # Run claude with the prompt
+        local output
+        if output=$(claude --dangerously-skip-permissions -p "$full_prompt" 2>&1); then
+            echo "✅ [${agent_id}] Iteration ${iteration} complete"
+            echo "$output" | tail -5
+        else
+            echo "❌ [${agent_id}] Iteration ${iteration} failed"
+            echo "$output" | tail -5
+        fi
+
+        # Check for completion signal
+        if echo "$output" | grep -q "CONTINUOUS_CLAUDE_PROJECT_COMPLETE"; then
+            echo "🎉 [${agent_id}] Agent signaled completion"
+            break
+        fi
+
+        # Brief pause between iterations
+        sleep 2
+    done
+
+    update_agent_state "$agent_id" "completed"
+    echo "✅ [${agent_id}] Agent finished after ${iteration} iterations"
+}
+
+# Run agents in sequence (pipeline)
+# Usage: run_agent_pipeline <prompt> <agents>
+run_agent_pipeline() {
+    local prompt="$1"
+    local agents="$2"
+    local max_runs="${3:-5}"
+
+    for agent_id in $agents; do
+        echo ""
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "  Starting: ${agent_id}"
+        echo "═══════════════════════════════════════════════════════════════"
+
+        execute_agent "$agent_id" "$prompt" "$max_runs"
+
+        # Show dashboard after each agent
+        print_coordination_dashboard
+    done
+}
+
+# =============================================================================
 # Swarm Runner
 # =============================================================================
 
@@ -330,6 +426,7 @@ run_swarm() {
     local prompt="$1"
     local mode="${2:-$COORDINATION_MODE}"
     local agents="${3:-developer tester reviewer}"
+    local max_runs="${4:-5}"
 
     export COORDINATION_MODE="$mode"
     export SWARM_SESSION_ID="${SWARM_SESSION_ID:-$(date +%Y%m%d-%H%M%S)}"
@@ -340,15 +437,18 @@ run_swarm() {
     echo "   Agents: ${agents}"
     echo ""
 
+    # Initialize swarm state
+    init_swarm "$agents" "$prompt"
+
     case "$mode" in
         pipeline)
-            run_pipeline "$prompt"
+            run_pipeline "$prompt" "$agents" "$max_runs"
             ;;
         parallel)
-            run_parallel "$prompt"
+            run_parallel "$prompt" "$agents" "$max_runs"
             ;;
         adaptive)
-            run_adaptive "$prompt"
+            run_adaptive "$prompt" "$agents" "$max_runs"
             ;;
         *)
             echo "Error: Unknown mode: ${mode}" >&2
@@ -357,6 +457,7 @@ run_swarm() {
     esac
 
     echo ""
+    echo "🎉 Swarm completed!"
     print_coordination_dashboard
 }
 

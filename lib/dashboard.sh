@@ -54,11 +54,14 @@ start_dashboard() {
         return 1
     fi
 
-    # Check if uvicorn is available
+    # Check if uvicorn is available in current Python environment
     if ! python3 -c "import uvicorn" 2>/dev/null; then
-        echo "Warning: uvicorn not installed. Installing dependencies..." >&2
-        (cd "${DASHBOARD_DIR}/backend" && pip install -e . 2>/dev/null) || {
+        echo "Warning: uvicorn not installed in current Python environment." >&2
+        echo "Installing dependencies..." >&2
+        # Use python3 -m pip to ensure we install into the same Python that will run uvicorn
+        (cd "${DASHBOARD_DIR}/backend" && python3 -m pip install -e . 2>&1) || {
             echo "Error: Could not install dependencies" >&2
+            echo "Try running: pip install fastapi uvicorn aiosqlite" >&2
             return 1
         }
     fi

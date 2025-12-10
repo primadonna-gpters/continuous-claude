@@ -366,10 +366,12 @@ execute_agent() {
 
         if [[ "$VERBOSE" == "true" ]]; then
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "📺 [${agent_id}] Live output:"
+            echo "📺 [${agent_id}] Live output (streaming):"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            claude --dangerously-skip-permissions --output-format json -p "$full_prompt" 2>&1 | tee "$temp_stdout" || exit_code=$?
+            # Use text format for human-readable real-time streaming
+            claude --dangerously-skip-permissions --output-format text -p "$full_prompt" 2>&1 | tee "$temp_stdout" || exit_code=$?
             cp "$temp_stdout" "$temp_stderr"
+            echo ""
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         else
             claude --dangerously-skip-permissions --output-format json -p "$full_prompt" >"$temp_stdout" 2>"$temp_stderr" || exit_code=$?
@@ -378,17 +380,19 @@ execute_agent() {
         if [[ $exit_code -eq 0 ]]; then
             echo "✅ [${agent_id}] Iteration ${iteration} complete"
 
-            # Parse cost from JSON output
-            local cost
-            cost=$(cat "$temp_stdout" | jq -r 'if type == "array" then .[-1] else . end | .cost_usd // .total_cost // 0' 2>/dev/null || echo "0")
-            if [[ "$cost" != "0" && "$cost" != "null" ]]; then
-                echo "   💰 Cost: \$${cost}"
-            fi
+            # Parse cost from JSON output (only available in non-verbose mode)
+            if [[ "$VERBOSE" != "true" ]]; then
+                local cost
+                cost=$(cat "$temp_stdout" | jq -r 'if type == "array" then .[-1] else . end | .cost_usd // .total_cost // 0' 2>/dev/null || echo "0")
+                if [[ "$cost" != "0" && "$cost" != "null" ]]; then
+                    echo "   💰 Cost: \$${cost}"
+                fi
 
-            # Show output summary in non-verbose mode
-            if [[ "$VERBOSE" != "true" && -s "$temp_stderr" ]]; then
-                echo "   📝 Output (last 5 lines):"
-                tail -5 "$temp_stderr" | sed 's/^/      /'
+                # Show output summary in non-verbose mode
+                if [[ -s "$temp_stderr" ]]; then
+                    echo "   📝 Output (last 5 lines):"
+                    tail -5 "$temp_stderr" | sed 's/^/      /'
+                fi
             fi
         else
             echo "❌ [${agent_id}] Iteration ${iteration} failed (exit code: ${exit_code})"

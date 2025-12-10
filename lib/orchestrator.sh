@@ -18,7 +18,8 @@ source "${SCRIPT_DIR}/worktrees.sh"
 
 SWARM_DIR="${SWARM_DIR:-.continuous-claude}"
 STATE_DIR="${SWARM_DIR}/state"
-SWARM_SESSION_ID="${SWARM_SESSION_ID:-$(date +%Y%m%d-%H%M%S)}"
+# Use timestamp + PID + random for unique session ID
+SWARM_SESSION_ID="${SWARM_SESSION_ID:-$(date +%Y%m%d-%H%M%S)-$$-$(printf '%04x' $RANDOM)}"
 
 # Agent states are stored in JSON files for bash 3 compatibility
 # State is managed through STATE_DIR/agents.json

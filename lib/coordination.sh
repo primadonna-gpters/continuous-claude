@@ -174,65 +174,23 @@ run_pipeline() {
     run_agent_pipeline "$prompt" "$agents" "$max_runs"
 }
 
-# Run in parallel mode (concurrent where possible)
+# Run in parallel mode
+# NOTE: True parallel execution requires worktree isolation (future feature)
+# Currently runs as optimized sequential: planner → developer → tester → PR → reviewer
 # Usage: run_parallel <prompt> [agents] [max_runs]
 run_parallel() {
     local prompt="$1"
     local agents="${2:-planner developer tester reviewer}"
     local max_runs="${3:-5}"
-    local branch_name="continuous-claude/swarm-${SWARM_SESSION_ID}"
 
-    echo "⚡ Running in PARALLEL mode"
-    echo "   Flow: planner → (developer ∥ tester) → reviewer"
+    echo "⚡ Running in PARALLEL mode (optimized sequential)"
+    echo "   Note: True parallel requires worktree isolation (future feature)"
+    echo "   Current flow: planner → developer → tester → PR → reviewer"
     echo ""
 
-    # Create a working branch for the swarm
-    if git rev-parse --git-dir > /dev/null 2>&1; then
-        echo "🌿 Creating swarm branch: ${branch_name}"
-        git checkout -b "$branch_name" 2>/dev/null || git checkout "$branch_name" 2>/dev/null || true
-    fi
-
-    # 1. Planner runs first (others depend on the plan)
-    echo "═══════════════════════════════════════════════════════════════"
-    echo "  Phase 1: Planning"
-    echo "═══════════════════════════════════════════════════════════════"
-    local planner_prompt
-    planner_prompt=$(build_agent_prompt "planner" "$prompt")
-    execute_agent "planner" "$planner_prompt" "$max_runs"
-
-    # 2. Developer and tester run in parallel
-    echo ""
-    echo "═══════════════════════════════════════════════════════════════"
-    echo "  Phase 2: Development & Testing (parallel)"
-    echo "═══════════════════════════════════════════════════════════════"
-
-    local dev_prompt tester_prompt
-    dev_prompt=$(build_agent_prompt "developer" "$prompt")
-    tester_prompt=$(build_agent_prompt "tester" "$prompt")
-
-    (execute_agent "developer" "$dev_prompt" "$max_runs") &
-    local dev_pid=$!
-
-    (execute_agent "tester" "$tester_prompt" "$max_runs") &
-    local test_pid=$!
-
-    # Wait for both to complete
-    echo "⏳ Waiting for developer and tester to complete..."
-    wait $dev_pid $test_pid
-
-    # 3. Reviewer runs last
-    echo ""
-    echo "═══════════════════════════════════════════════════════════════"
-    echo "  Phase 3: Review"
-    echo "═══════════════════════════════════════════════════════════════"
-    local reviewer_prompt
-    reviewer_prompt=$(build_agent_prompt "reviewer" "$prompt")
-    execute_agent "reviewer" "$reviewer_prompt" "$max_runs"
-
-    # Create PR if we have changes
-    if git rev-parse --git-dir > /dev/null 2>&1; then
-        create_swarm_pr "$branch_name" "$prompt"
-    fi
+    # For now, parallel mode uses the same pipeline logic
+    # True parallel would need separate worktrees for each agent
+    run_agent_pipeline "$prompt" "$agents" "$max_runs"
 }
 
 # Run in adaptive mode (dynamically adjust based on progress)
@@ -366,124 +324,68 @@ print_coordination_dashboard() {
 # Agent Execution
 # =============================================================================
 
+# Completion signals
+AGENT_TASK_COMPLETE="AGENT_TASK_COMPLETE"
+PROJECT_COMPLETE="CONTINUOUS_CLAUDE_PROJECT_COMPLETE"
+
 # Run a single agent iteration with Claude Code
 # Usage: execute_agent <agent_id> <prompt> [max_runs]
+# Returns: 0 on success, 1 on failure, 2 if bugs found (for tester)
 execute_agent() {
     local agent_id="$1"
     local prompt="$2"
     local max_runs="${3:-5}"
     local notes_file="SHARED_TASK_NOTES.md"
-    local completion_signal="CONTINUOUS_CLAUDE_PROJECT_COMPLETE"
-
-    # Get persona prompt
-    local persona_prompt
-    persona_prompt=$(get_persona_prompt "$agent_id" 2>/dev/null || echo "")
 
     echo "🤖 [${agent_id}] Starting agent execution..."
 
     # Update agent state
     update_agent_state "$agent_id" "running"
 
+    # Track commits before agent runs
+    local commits_before
+    commits_before=$(git rev-list --count HEAD 2>/dev/null || echo "0")
+
     # Run Claude Code iterations
     local iteration=0
+    local agent_result=0
     while [[ $iteration -lt $max_runs ]]; do
         iteration=$((iteration + 1))
         increment_iteration "$agent_id"
 
         echo "🔄 [${agent_id}] Iteration ${iteration}/${max_runs}"
 
-        # Build full prompt (similar to single mode)
-        local full_prompt="## CONTINUOUS WORKFLOW CONTEXT
+        # Build the full prompt with notes context
+        local full_prompt
+        full_prompt=$(build_full_prompt "$agent_id" "$prompt" "$notes_file")
 
-This is part of a continuous development loop where work happens incrementally across multiple iterations.
-
-**Important**: You don't need to complete the entire goal in one iteration. Just make meaningful progress on one thing, then leave clear notes for the next iteration.
-
-**Project Completion Signal**: If you determine that the ENTIRE project goal is fully complete, include the exact phrase \"${completion_signal}\" in your response."
-
-        # Add persona role if available
-        if [[ -n "$persona_prompt" ]]; then
-            full_prompt+="
-
-## AGENT ROLE (${agent_id})
-${persona_prompt}"
-        fi
-
-        # Add primary goal
-        full_prompt+="
-
-## PRIMARY GOAL
-${prompt}"
-
-        # Add context from previous iterations if notes file exists
-        if [[ -f "$notes_file" ]]; then
-            local notes_content
-            notes_content=$(cat "$notes_file")
-            full_prompt+="
-
-## CONTEXT FROM PREVIOUS ITERATION
-
-The following is from ${notes_file}, maintained by previous iterations to provide context:
-
-${notes_content}"
-        fi
-
-        # Add iteration notes instructions
-        full_prompt+="
-
-## ITERATION NOTES
-
-"
-        if [[ -f "$notes_file" ]]; then
-            full_prompt+="Update the \`${notes_file}\` file with relevant context for the next iteration. Add new notes and remove outdated information to keep it current and useful."
-        else
-            full_prompt+="Create a \`${notes_file}\` file with relevant context and instructions for the next iteration."
-        fi
-
-        full_prompt+="
-
-This file helps coordinate work across iterations. It should:
-- Contain relevant context and instructions for the next iteration
-- Stay concise and actionable (like a notes file, not a detailed report)
-- Help the next developer understand what to do next
-
-## CRITICAL INSTRUCTIONS
-- DO NOT ask questions. Proceed with reasonable defaults.
-- DO NOT wait for confirmation. Just do the work.
-- Focus on your specific role as ${agent_id}
-- Make meaningful progress on the task
-- Update ${notes_file} with what you accomplished"
-
-        # Run claude with JSON output format (like single mode)
+        # Run claude with JSON output format
         local temp_stdout=$(mktemp)
         local temp_stderr=$(mktemp)
         local exit_code=0
 
         if [[ "$VERBOSE" == "true" ]]; then
-            # Verbose mode: stream output in real-time using tee
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "📺 [${agent_id}] Live output:"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             claude --dangerously-skip-permissions --output-format json -p "$full_prompt" 2>&1 | tee "$temp_stdout" || exit_code=$?
-            # Copy stdout to temp_stderr for completion signal check
             cp "$temp_stdout" "$temp_stderr"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         else
-            # Normal mode: capture output silently
             claude --dangerously-skip-permissions --output-format json -p "$full_prompt" >"$temp_stdout" 2>"$temp_stderr" || exit_code=$?
         fi
 
         if [[ $exit_code -eq 0 ]]; then
             echo "✅ [${agent_id}] Iteration ${iteration} complete"
 
-            # Try to parse cost from JSON output
+            # Parse cost from JSON output
             local cost
             cost=$(cat "$temp_stdout" | jq -r 'if type == "array" then .[-1] else . end | .cost_usd // .total_cost // 0' 2>/dev/null || echo "0")
             if [[ "$cost" != "0" && "$cost" != "null" ]]; then
                 echo "   💰 Cost: \$${cost}"
             fi
 
-            # Show last few lines of stderr (Claude's conversation output) - only in non-verbose mode
+            # Show output summary in non-verbose mode
             if [[ "$VERBOSE" != "true" && -s "$temp_stderr" ]]; then
                 echo "   📝 Output (last 5 lines):"
                 tail -5 "$temp_stderr" | sed 's/^/      /'
@@ -495,137 +397,383 @@ This file helps coordinate work across iterations. It should:
             fi
         fi
 
-        # Check for completion signal in output
-        if grep -q "$completion_signal" "$temp_stdout" "$temp_stderr" 2>/dev/null; then
-            echo "🎉 [${agent_id}] Agent signaled completion"
+        # Check for task completion signal (agent finished its work)
+        if grep -q "$AGENT_TASK_COMPLETE" "$temp_stdout" "$temp_stderr" 2>/dev/null; then
+            echo "✅ [${agent_id}] Agent completed its task"
             rm -f "$temp_stdout" "$temp_stderr"
             break
         fi
 
-        # Cleanup temp files
-        rm -f "$temp_stdout" "$temp_stderr"
+        # Check for project completion signal
+        if grep -q "$PROJECT_COMPLETE" "$temp_stdout" "$temp_stderr" 2>/dev/null; then
+            echo "🎉 [${agent_id}] Project complete signal detected"
+            rm -f "$temp_stdout" "$temp_stderr"
+            break
+        fi
 
-        # Brief pause between iterations
-        sleep 2
+        # Check if tester found bugs (special handling)
+        if [[ "$agent_id" == "tester" ]]; then
+            if grep -q "BUGS_FOUND" "$temp_stdout" "$temp_stderr" 2>/dev/null; then
+                echo "🐛 [${agent_id}] Bugs found - will need developer fix"
+                agent_result=2
+            fi
+        fi
+
+        rm -f "$temp_stdout" "$temp_stderr"
+        sleep 1
     done
+
+    # Verify commits were made (for developer)
+    if [[ "$agent_id" == "developer" ]]; then
+        local commits_after
+        commits_after=$(git rev-list --count HEAD 2>/dev/null || echo "0")
+        if [[ "$commits_after" -eq "$commits_before" ]]; then
+            echo "⚠️  [${agent_id}] Warning: No commits were made"
+        else
+            local new_commits=$((commits_after - commits_before))
+            echo "📝 [${agent_id}] Made ${new_commits} commit(s)"
+        fi
+    fi
 
     update_agent_state "$agent_id" "completed"
     echo "✅ [${agent_id}] Agent finished after ${iteration} iterations"
+    return $agent_result
+}
+
+# Build complete prompt with notes context
+# Usage: build_full_prompt <agent_id> <task_prompt> <notes_file>
+build_full_prompt() {
+    local agent_id="$1"
+    local task_prompt="$2"
+    local notes_file="$3"
+
+    local full_prompt="$task_prompt"
+
+    # Add notes context if file exists
+    if [[ -f "$notes_file" ]]; then
+        full_prompt+="
+
+## CURRENT STATUS (from ${notes_file})
+
+$(cat "$notes_file")"
+    fi
+
+    # Add critical instructions
+    full_prompt+="
+
+## CRITICAL INSTRUCTIONS
+- DO NOT ask questions. Proceed with reasonable defaults.
+- DO NOT wait for confirmation. Just do the work.
+- When your task is complete, include '${AGENT_TASK_COMPLETE}' in your response.
+- Update ${notes_file} with your progress and any important notes for the next agent."
+
+    echo "$full_prompt"
 }
 
 # Run agents in sequence (pipeline)
-# Usage: run_agent_pipeline <prompt> <agents>
+# Workflow: planner → developer → tester → (loop if bugs) → PR → reviewer
+# Usage: run_agent_pipeline <prompt> <agents> [max_runs]
 run_agent_pipeline() {
     local prompt="$1"
     local agents="$2"
     local max_runs="${3:-5}"
-    local branch_name="continuous-claude/swarm-${SWARM_SESSION_ID}"
     local notes_file="SHARED_TASK_NOTES.md"
+    local max_bug_fix_cycles=3
 
     # Create a working branch for the swarm
-    if git rev-parse --git-dir > /dev/null 2>&1; then
-        local main_branch
-        main_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
-
-        echo "🌿 Creating swarm branch: ${branch_name}"
-        git checkout -b "$branch_name" 2>/dev/null || git checkout "$branch_name" 2>/dev/null || true
+    local branch_name
+    branch_name=$(create_swarm_branch)
+    if [[ -z "$branch_name" ]]; then
+        echo "⚠️  Not in a git repo, continuing without branch"
     fi
 
-    for agent_id in $agents; do
-        echo ""
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "  Starting: ${agent_id}"
-        echo "═══════════════════════════════════════════════════════════════"
+    # Phase 1: Planning
+    if [[ "$agents" == *"planner"* ]]; then
+        run_agent_phase "planner" "$prompt" "$max_runs" "Phase 1: Planning"
+    fi
 
-        # Build agent-specific prompt based on role
-        local agent_prompt
-        agent_prompt=$(build_agent_prompt "$agent_id" "$prompt")
+    # Phase 2: Development & Testing Loop
+    local bug_fix_cycle=0
+    local bugs_found=true
 
-        execute_agent "$agent_id" "$agent_prompt" "$max_runs"
+    while [[ "$bugs_found" == "true" && $bug_fix_cycle -lt $max_bug_fix_cycles ]]; do
+        bug_fix_cycle=$((bug_fix_cycle + 1))
 
-        # Show dashboard after each agent
-        print_coordination_dashboard
+        if [[ $bug_fix_cycle -gt 1 ]]; then
+            echo ""
+            echo "🔁 Bug fix cycle ${bug_fix_cycle}/${max_bug_fix_cycles}"
+        fi
+
+        # Developer phase
+        if [[ "$agents" == *"developer"* ]]; then
+            run_agent_phase "developer" "$prompt" "$max_runs" "Phase 2: Development"
+        fi
+
+        # Tester phase
+        if [[ "$agents" == *"tester"* ]]; then
+            run_agent_phase "tester" "$prompt" "$max_runs" "Phase 3: Testing"
+            local tester_result=$?
+
+            if [[ $tester_result -eq 2 ]]; then
+                echo "🐛 Bugs found, cycling back to developer..."
+                bugs_found=true
+            else
+                bugs_found=false
+            fi
+        else
+            bugs_found=false
+        fi
     done
 
-    # Create PR if we have changes
-    if git rev-parse --git-dir > /dev/null 2>&1; then
-        create_swarm_pr "$branch_name" "$prompt"
+    if [[ $bug_fix_cycle -ge $max_bug_fix_cycles && "$bugs_found" == "true" ]]; then
+        echo "⚠️  Max bug fix cycles reached, proceeding anyway"
     fi
+
+    # Phase 4: Create PR (before reviewer)
+    local pr_url=""
+    if [[ -n "$branch_name" ]]; then
+        pr_url=$(create_swarm_pr "$branch_name" "$prompt")
+    fi
+
+    # Phase 5: Review (reviews the actual PR)
+    if [[ "$agents" == *"reviewer"* ]]; then
+        local reviewer_prompt
+        reviewer_prompt=$(build_agent_prompt "reviewer" "$prompt" "$pr_url")
+        run_agent_phase "reviewer" "$reviewer_prompt" "$max_runs" "Phase 4: Code Review"
+    fi
+
+    echo ""
+    echo "🎉 Pipeline completed!"
+}
+
+# Run a single agent phase with nice output
+# Usage: run_agent_phase <agent_id> <prompt> <max_runs> <phase_name>
+run_agent_phase() {
+    local agent_id="$1"
+    local prompt="$2"
+    local max_runs="$3"
+    local phase_name="$4"
+
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  ${phase_name}: ${agent_id}"
+    echo "═══════════════════════════════════════════════════════════════"
+
+    local agent_prompt
+    agent_prompt=$(build_agent_prompt "$agent_id" "$prompt")
+
+    execute_agent "$agent_id" "$agent_prompt" "$max_runs"
+    local result=$?
+
+    print_coordination_dashboard
+    return $result
+}
+
+# Create swarm branch with error handling
+# Usage: create_swarm_branch
+# Returns: branch name or empty string
+create_swarm_branch() {
+    if ! git rev-parse --git-dir > /dev/null 2>&1; then
+        return 0
+    fi
+
+    local branch_name="continuous-claude/swarm-${SWARM_SESSION_ID}"
+    local main_branch
+    main_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+    main_branch="${main_branch:-main}"
+
+    echo "🌿 Creating swarm branch: ${branch_name}" >&2
+
+    # Try to create new branch
+    if git checkout -b "$branch_name" 2>/dev/null; then
+        echo "$branch_name"
+        return 0
+    fi
+
+    # Branch exists, try to checkout
+    if git checkout "$branch_name" 2>/dev/null; then
+        echo "$branch_name"
+        return 0
+    fi
+
+    # Both failed
+    echo "❌ Failed to create/checkout branch: ${branch_name}" >&2
+    return 1
 }
 
 # Build role-specific prompt for each agent
-# Usage: build_agent_prompt <agent_id> <base_prompt>
+# Usage: build_agent_prompt <agent_id> <base_prompt> [pr_url]
 build_agent_prompt() {
     local agent_id="$1"
     local base_prompt="$2"
+    local pr_url="${3:-}"
     local notes_file="SHARED_TASK_NOTES.md"
 
     case "$agent_id" in
         planner)
-            echo "## PLANNING TASK
+            cat << EOF
+# 📋 PLANNER AGENT TASK
 
-Analyze the following request and create a detailed implementation plan:
+## Your Mission
+Analyze the following request and create a detailed, actionable implementation plan.
 
+## Request
 ${base_prompt}
 
-Your deliverables:
-1. Break down the task into specific implementation steps
-2. Identify files that need to be created or modified
-3. Define acceptance criteria for each step
-4. Document any dependencies or considerations
+## Deliverables
+Create ${notes_file} with:
 
-Write your plan to ${notes_file} so the Developer agent can follow it."
+1. **Task Breakdown**: List specific implementation steps
+2. **Files to Modify**: Which files need to be created/changed
+3. **Acceptance Criteria**: How to verify each step is complete
+4. **Dependencies**: Any prerequisites or considerations
+
+## Output Format in ${notes_file}
+\`\`\`markdown
+# Implementation Plan
+
+## Overview
+Brief description of what will be built
+
+## Steps
+1. [ ] Step 1: Description
+   - Files: file1.ts, file2.ts
+   - Criteria: How to verify
+
+2. [ ] Step 2: Description
+   ...
+
+## Notes for Developer
+Any important considerations
+\`\`\`
+
+When done, include 'AGENT_TASK_COMPLETE' in your response.
+EOF
             ;;
         developer)
-            echo "## DEVELOPMENT TASK
+            cat << EOF
+# 🧑‍💻 DEVELOPER AGENT TASK
 
-Implement the feature/fix based on the plan in ${notes_file}:
+## Your Mission
+Implement the feature/fix following the plan in ${notes_file}.
 
-Original request: ${base_prompt}
+## Original Request
+${base_prompt}
 
-Your responsibilities:
-1. Read the plan from ${notes_file}
-2. Implement the code changes step by step
-3. Follow the acceptance criteria defined in the plan
-4. Update ${notes_file} with what you completed and any issues found
-5. Commit your changes with descriptive messages
+## Instructions
+1. **Read the Plan**: Check ${notes_file} for implementation steps
+2. **Implement Step by Step**: Follow the plan's task breakdown
+3. **Commit Changes**: Make atomic commits with clear messages
+4. **Update Notes**: Mark completed steps in ${notes_file}
 
-Do NOT write tests - the Tester agent will handle that."
+## Important Rules
+- DO NOT write tests (Tester agent handles this)
+- DO NOT skip steps from the plan
+- Commit after each logical change
+- If blocked, document the issue in ${notes_file}
+
+## When Done
+Update ${notes_file} with:
+- Which steps you completed
+- Any issues encountered
+- Notes for the Tester
+
+Include 'AGENT_TASK_COMPLETE' in your response.
+EOF
             ;;
         tester)
-            echo "## TESTING TASK
+            cat << EOF
+# 🧪 TESTER AGENT TASK
 
-Write tests for the implementation documented in ${notes_file}:
+## Your Mission
+Write and run tests for the implementation documented in ${notes_file}.
 
-Original request: ${base_prompt}
+## Original Request
+${base_prompt}
 
-Your responsibilities:
-1. Read ${notes_file} to understand what was implemented
-2. Write comprehensive tests (unit tests, integration tests as needed)
-3. Run the tests and ensure they pass
-4. Update ${notes_file} with test coverage information
-5. If tests fail, document the failures for the Developer
+## Instructions
+1. **Read Notes**: Check ${notes_file} for what was implemented
+2. **Write Tests**: Create comprehensive test coverage
+3. **Run Tests**: Execute all tests and verify they pass
+4. **Document Results**: Update ${notes_file} with test status
 
-Do NOT fix implementation bugs - document them in ${notes_file} for the Developer."
+## Test Requirements
+- Unit tests for new functions/methods
+- Integration tests if applicable
+- Edge case coverage
+- Error handling tests
+
+## Important Rules
+- DO NOT fix implementation bugs
+- If tests fail, document failures in ${notes_file} and include 'BUGS_FOUND' in your response
+- If all tests pass, include 'AGENT_TASK_COMPLETE'
+
+## Output to ${notes_file}
+\`\`\`markdown
+## Test Results
+- Tests written: X
+- Tests passing: Y
+- Coverage: Z%
+
+### Issues Found (if any)
+- Bug 1: Description
+- Bug 2: Description
+\`\`\`
+EOF
             ;;
         reviewer)
-            echo "## CODE REVIEW TASK
+            local pr_section=""
+            if [[ -n "$pr_url" ]]; then
+                pr_section="
+## Pull Request to Review
+${pr_url}
 
-Review the code changes and prepare for PR:
+Use 'gh pr view ${pr_url}' to see the PR details.
+Use 'gh pr diff ${pr_url}' to see the code changes.
+"
+            fi
+            cat << EOF
+# 👁️ REVIEWER AGENT TASK
 
-Original request: ${base_prompt}
+## Your Mission
+Review the code changes and provide feedback.
+${pr_section}
+## Original Request
+${base_prompt}
 
-Your responsibilities:
-1. Read ${notes_file} to understand the implementation and tests
-2. Review the code for quality, security, and best practices
-3. Check that all acceptance criteria are met
-4. Update ${notes_file} with your review summary
-5. If changes are needed, document them clearly
+## Review Checklist
+1. **Code Quality**: Clean, readable, follows best practices
+2. **Security**: No vulnerabilities, proper input validation
+3. **Tests**: Adequate coverage, tests are meaningful
+4. **Documentation**: Code is well-commented where needed
+5. **Acceptance Criteria**: All requirements from plan are met
 
-If everything looks good, add 'APPROVED_FOR_MERGE' to ${notes_file}."
+## Instructions
+1. Read ${notes_file} for context
+2. Review the code changes
+3. Check test results
+4. Provide constructive feedback
+
+## Output to ${notes_file}
+\`\`\`markdown
+## Code Review Summary
+
+### Verdict: APPROVED / CHANGES_REQUESTED
+
+### Feedback
+- Issue 1: Description (severity: high/medium/low)
+- Issue 2: Description
+
+### What's Good
+- Positive point 1
+- Positive point 2
+\`\`\`
+
+If approved, include 'APPROVED_FOR_MERGE' and 'AGENT_TASK_COMPLETE'.
+If changes needed, document them clearly.
+EOF
             ;;
         *)
-            # Default: use base prompt
             echo "${base_prompt}"
             ;;
     esac
@@ -633,6 +781,7 @@ If everything looks good, add 'APPROVED_FOR_MERGE' to ${notes_file}."
 
 # Create a PR for the swarm work
 # Usage: create_swarm_pr <branch_name> <prompt>
+# Returns: PR URL (echoed to stdout)
 create_swarm_pr() {
     local branch_name="$1"
     local prompt="$2"
@@ -640,42 +789,50 @@ create_swarm_pr() {
 
     # Check if there are any commits to push
     local main_branch
-    main_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
+    main_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+    main_branch="${main_branch:-main}"
 
     local commit_count
     commit_count=$(git rev-list --count "${main_branch}..HEAD" 2>/dev/null || echo "0")
 
     if [[ "$commit_count" -eq 0 ]]; then
-        echo "⚠️  No commits to create PR"
+        echo "⚠️  No commits to create PR" >&2
         return 0
     fi
 
-    echo ""
-    echo "═══════════════════════════════════════════════════════════════"
-    echo "  Creating Pull Request"
-    echo "═══════════════════════════════════════════════════════════════"
+    echo "" >&2
+    echo "═══════════════════════════════════════════════════════════════" >&2
+    echo "  Creating Pull Request" >&2
+    echo "═══════════════════════════════════════════════════════════════" >&2
 
     # Push the branch
-    echo "📤 Pushing branch: ${branch_name}"
-    git push -u origin "$branch_name" 2>/dev/null || {
-        echo "⚠️  Failed to push branch"
+    echo "📤 Pushing branch: ${branch_name}" >&2
+    if ! git push -u origin "$branch_name" 2>/dev/null; then
+        echo "⚠️  Failed to push branch" >&2
         return 1
-    }
+    fi
 
-    # Get PR body from notes file if exists
+    # Build PR body
     local pr_body="## Summary
 
 This PR was created by Continuous Claude Swarm.
 
 **Original Task:** ${prompt}
 
+**Session:** ${SWARM_SESSION_ID}
 "
     if [[ -f "$notes_file" ]]; then
-        pr_body+="## Implementation Notes
+        pr_body+="
+## Implementation Notes
 
-\`\`\`
+<details>
+<summary>Click to expand</summary>
+
+\`\`\`markdown
 $(cat "$notes_file")
 \`\`\`
+
+</details>
 "
     fi
 
@@ -690,22 +847,21 @@ $(cat "$notes_file")
             --title "🤖 ${prompt:0:60}" \
             --body "$pr_body" \
             --base "$main_branch" \
-            --head "$branch_name" 2>&1) || {
-            echo "⚠️  Failed to create PR: $pr_url"
-            return 1
-        }
-        echo "✅ PR created: ${pr_url}"
+            --head "$branch_name" 2>/dev/null)
 
-        # Auto-merge if enabled
-        if [[ "$AUTO_MERGE" == "true" ]]; then
-            echo "🔀 Auto-merge enabled, merging PR..."
-            gh pr merge "$pr_url" --squash --delete-branch || {
-                echo "⚠️  Auto-merge failed"
-            }
+        if [[ -n "$pr_url" ]]; then
+            echo "✅ PR created: ${pr_url}" >&2
+            # Return PR URL to stdout for capture
+            echo "$pr_url"
+            return 0
+        else
+            echo "⚠️  Failed to create PR" >&2
+            return 1
         fi
     else
-        echo "⚠️  gh CLI not found. Please create PR manually:"
-        echo "   gh pr create --base $main_branch --head $branch_name"
+        echo "⚠️  gh CLI not found. Please create PR manually:" >&2
+        echo "   gh pr create --base $main_branch --head $branch_name" >&2
+        return 1
     fi
 }
 
@@ -722,7 +878,8 @@ run_swarm() {
     local max_runs="${4:-5}"
 
     export COORDINATION_MODE="$mode"
-    export SWARM_SESSION_ID="${SWARM_SESSION_ID:-$(date +%Y%m%d-%H%M%S)}"
+    # Use timestamp + PID + random for unique session ID
+    export SWARM_SESSION_ID="${SWARM_SESSION_ID:-$(date +%Y%m%d-%H%M%S)-$$-$(printf '%04x' $RANDOM)}"
 
     echo "🚀 Starting Continuous Claude Swarm"
     echo "   Session: ${SWARM_SESSION_ID}"

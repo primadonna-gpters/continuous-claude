@@ -1,7 +1,21 @@
 <h1><img width="512" height="294" alt="Continuous Claude" src="https://github.com/user-attachments/assets/26878379-6cff-4803-a50d-c1e3f9455f55" /></h1>
 
-<details data-embed="anandchowdhary.com" data-title="Continuous Claude" data-summary="Run Claude Code in a loop repeatedly to do large projects">
-  <summary>Automated workflow that orchestrates Claude Code in a continuous loop, autonomously creating PRs, waiting for checks, and merging - so multi-step projects complete while you sleep.</summary>
+<p align="center">
+  <strong>Run Claude Code in a continuous loop with Multi-Agent Collaboration</strong><br>
+  Automated PR workflow • Multi-Agent Swarm • Real-time Dashboard • Learning System
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/version-v2.0.0-blue" alt="Version">
+  <img src="https://img.shields.io/badge/Claude_Code-CLI-purple" alt="Claude Code">
+  <img src="https://img.shields.io/badge/Multi--Agent-Swarm-green" alt="Multi-Agent">
+  <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="License">
+</p>
+
+---
+
+<details>
+  <summary>📖 <strong>Background Story</strong> - How Continuous Claude was born</summary>
 
 This all started because I was contractually obligated to write unit tests for a codebase with hundreds of thousands of lines of code and go from 0% to 80%+ coverage in the next few weeks - seems like something Claude should do. So I built [Continuous Claude](https://github.com/AnandChowdhary/continuous-claude), a CLI tool to run Claude Code in a loop that maintains a persistent context across multiple iterations.
 
@@ -58,18 +72,82 @@ The model mirrors human development practices. Claude Code handles the grunt wor
 
 </details>
 
+## 📋 Table of Contents
+
+- [How it Works](#️-how-it-works)
+- [Quick Start](#-quick-start)
+- [Flags](#-flags)
+- [Examples](#-examples)
+- [Multi-Agent Swarm (v2.0)](#-multi-agent-swarm-v20)
+- [Dashboard](#-dashboard)
+- [Learning System](#-learning-system)
+- [Automated Code Review](#️-automated-code-review)
+- [Agent Management](#-agent-management)
+- [Documentation](#-documentation)
+
+---
+
 ## ⚙️ How it works
 
-Using Claude Code to drive iterative development, this script fully automates the PR lifecycle from code changes through to merged commits:
+Using Claude Code to drive iterative development, this script fully automates the PR lifecycle from code changes through to merged commits.
 
-- Claude Code runs in a loop based on your prompt
-- All changes are committed to a new branch
-- A new pull request is created
-- It waits for all required PR checks and code reviews to complete
-- Once checks pass and reviews are approved, the PR is merged
-- This process repeats until your task is complete
-- A `SHARED_TASK_NOTES.md` file maintains continuity by passing context between iterations, enabling seamless handoffs across AI and human developers
-- If multiple agents decide that the project is complete, the loop will stop early.
+### Single-Agent Mode
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  📝 Your Prompt: "Add unit tests to auth module"           │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+         ┌─────────────────────────────────────┐
+         │        🔁 Continuous Loop           │
+         │  ┌─────────────────────────────┐   │
+         │  │ 1. Create branch            │   │
+         │  │ 2. Run Claude Code          │   │
+         │  │ 3. Commit changes           │   │
+         │  │ 4. Create PR                │   │
+         │  │ 5. Wait for CI checks       │   │
+         │  │ 6. Merge PR                 │   │
+         │  │ 7. Pull latest & repeat     │   │
+         │  └─────────────────────────────┘   │
+         │                                     │
+         │  📋 SHARED_TASK_NOTES.md maintains  │
+         │     context between iterations      │
+         └─────────────────────────────────────┘
+```
+
+### Multi-Agent Swarm (v2.0)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    🎯 Orchestrator                          │
+│         Coordinates agents • Resolves conflicts             │
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+        ┌───────────────────┼───────────────────┐
+        ▼                   ▼                   ▼
+  ┌───────────┐       ┌───────────┐       ┌───────────┐
+  │ 🧑‍💻 Dev    │──────▶│ 🧪 Test   │──────▶│ 👁️ Review │
+  │ Agent     │       │ Agent     │       │ Agent     │
+  └───────────┘       └───────────┘       └───────────┘
+        │                   │                   │
+        └───────────────────┴───────────────────┘
+                            │
+                   ┌────────┴────────┐
+                   │ 📊 Dashboard    │
+                   │ 🧠 Learning DB  │
+                   │ 💬 Message Queue│
+                   └─────────────────┘
+```
+
+| Feature | Single-Agent | Multi-Agent Swarm |
+|---------|--------------|-------------------|
+| Agents | 1 | Multiple (dev, test, reviewer, etc.) |
+| Coordination | Sequential loops | Pipeline / Parallel / Adaptive |
+| Communication | Notes file | Message queue system |
+| Learning | ❌ | ✅ Failure insights |
+| Dashboard | ❌ | ✅ Real-time monitoring |
+| Code Review | Manual | ✅ Automated |
 
 ## 🚀 Quick start
 
@@ -78,22 +156,29 @@ Using Claude Code to drive iterative development, this script fully automates th
 Install with a single command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AnandChowdhary/continuous-claude/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/primadonna-gpters/continuous-claude/main/install.sh | bash
 ```
 
 This will:
 
 - Install `continuous-claude` to `~/.local/bin`
+- Install Multi-Agent System modules to `~/.local/share/continuous-claude/lib/`
+- Install persona definitions to `~/.local/share/continuous-claude/personas/`
 - Check for required dependencies
 - Guide you through adding it to your PATH if needed
 
+> **Note**: You can override the default repository with environment variables:
+> ```bash
+> REPO_OWNER=your-fork REPO_BRANCH=dev curl -fsSL https://raw.githubusercontent.com/your-fork/continuous-claude/dev/install.sh | bash
+> ```
+
 ### Manual installation
 
-If you prefer to install manually:
+For v2.0 features, use the installer script above. For basic single-agent mode only:
 
 ```bash
 # Download the script
-curl -fsSL https://raw.githubusercontent.com/AnandChowdhary/continuous-claude/main/continuous_claude.sh -o continuous-claude
+curl -fsSL https://raw.githubusercontent.com/primadonna-gpters/continuous-claude/main/continuous_claude.sh -o continuous-claude
 
 # Make it executable
 chmod +x continuous-claude
@@ -105,8 +190,14 @@ sudo mv continuous-claude /usr/local/bin/
 To uninstall `continuous-claude`:
 
 ```bash
+# Remove executable
 rm ~/.local/bin/continuous-claude
-# or if you installed to /usr/local/bin:
+rm ~/.local/bin/.continuous-claude-core
+
+# Remove Multi-Agent System modules and personas
+rm -rf ~/.local/share/continuous-claude/
+
+# Or if you installed to /usr/local/bin:
 sudo rm /usr/local/bin/continuous-claude
 ```
 
@@ -117,6 +208,7 @@ Before using `continuous-claude`, you need:
 1. **[Claude Code CLI](https://code.claude.com)** - Authenticate with `claude auth`
 2. **[GitHub CLI](https://cli.github.com)** - Authenticate with `gh auth login`
 3. **jq** - Install with `brew install jq` (macOS) or `apt-get install jq` (Linux)
+4. **Python 3.11+** (optional) - Required for dashboard: `pip install fastapi uvicorn aiosqlite`
 
 ### Usage
 
@@ -125,7 +217,7 @@ Before using `continuous-claude`, you need:
 continuous-claude --prompt "add unit tests until all code is covered" --max-runs 5
 
 # Or explicitly specify the owner and repo
-continuous-claude --prompt "add unit tests until all code is covered" --max-runs 5 --owner AnandChowdhary --repo continuous-claude
+continuous-claude --prompt "add unit tests until all code is covered" --max-runs 5 --owner your-username --repo your-repo
 
 # Or run with a cost budget instead
 continuous-claude --prompt "add unit tests until all code is covered" --max-cost 10.00
@@ -269,6 +361,144 @@ Here's what a successful run looks like:
 🎉 Done with total cost: $0.042
 ```
 
+## 🐝 Multi-Agent Swarm (v2.0)
+
+Run multiple specialized agents that collaborate on complex tasks:
+
+```bash
+# Run a swarm with developer, tester, and reviewer agents
+continuous-claude swarm -p "Build user authentication with JWT" -m pipeline
+
+# Run with custom agents and auto-merge
+continuous-claude swarm -p "Add API endpoints" -a "developer tester" --auto-merge
+
+# Check swarm status
+continuous-claude swarm --status
+```
+
+### Coordination Modes
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| **Pipeline** | Sequential: dev → test → review | Standard feature development |
+| **Parallel** | Concurrent independent work | Multi-component development |
+| **Adaptive** | Dynamic switching based on progress | Complex projects |
+
+### Available Personas
+
+| Persona | Emoji | Role |
+|---------|-------|------|
+| `developer` | 🧑‍💻 | Feature implementation, bug fixes |
+| `tester` | 🧪 | Test writing, coverage analysis |
+| `reviewer` | 👁️ | Code review, quality gates |
+| `documenter` | 📚 | Documentation, README updates |
+| `security` | 🔒 | Security scanning, vulnerability fixes |
+
+### Swarm Flags
+
+| Flag | Description |
+|------|-------------|
+| `-p, --prompt` | Task prompt (required) |
+| `-m, --mode` | Coordination mode: `pipeline`, `parallel`, `adaptive` |
+| `-a, --agents` | Agent list (default: `"developer tester reviewer"`) |
+| `--auto-merge` | Auto-merge PRs when approved |
+| `--status` | Show current swarm status |
+
+## 📊 Dashboard
+
+Real-time monitoring web interface for swarm sessions:
+
+```bash
+# Start dashboard server
+continuous-claude dashboard start 8000
+
+# Check status
+continuous-claude dashboard status
+
+# Stop dashboard
+continuous-claude dashboard stop
+```
+
+Open http://localhost:8000 in your browser.
+
+Features:
+- Live agent status and iteration tracking
+- Task queue visualization (pending/in-progress/completed/failed)
+- Real-time log streaming
+- Cost tracking per agent and total
+- WebSocket-powered updates
+
+## 🧠 Learning System
+
+Continuous Claude learns from failures to improve future attempts:
+
+```bash
+# Initialize learning database
+continuous-claude learn init
+
+# Install common pre-built insights
+continuous-claude learn install-prebuilt
+
+# View failure statistics
+continuous-claude learn stats
+
+# Parse CI logs for failures
+continuous-claude learn parse-ci < ci.log
+```
+
+The system:
+- Captures failures from CI logs and PR rejections
+- Extracts patterns and solutions as "insights"
+- Injects relevant insights into future prompts
+- Tracks insight effectiveness over time
+
+## 👁️ Automated Code Review
+
+AI-powered code review with static analysis integration:
+
+```bash
+# Preview review (without submitting)
+continuous-claude review 123
+
+# Review and submit to GitHub
+continuous-claude review 123 --submit
+
+# Review with specific repo
+continuous-claude review 123 -r owner/repo --submit
+
+# Run static analysis only
+continuous-claude review --analyze ./src
+```
+
+Includes:
+- ESLint, Ruff, TypeScript static analysis
+- Severity levels: blocker, major, minor, suggestion
+- Automatic decision: APPROVE / REQUEST_CHANGES / COMMENT
+- GitHub PR review API integration
+
+## 🤖 Agent Management
+
+View and manage available agent personas:
+
+```bash
+# List all available personas
+continuous-claude agents list
+
+# Get details for a specific persona
+continuous-claude agents info developer
+```
+
+## 📚 Documentation
+
+- [**User Guide**](docs/USER_GUIDE.md) - Practical guide with examples
+- [**API Reference**](docs/API_REFERENCE.md) - Complete function reference
+- [**Project Index**](docs/PROJECT_INDEX.md) - Architecture overview
+- [**Cheatsheet**](docs/CHEATSHEET.md) - Quick reference card
+
 ## 📃 License
 
-[MIT](./LICENSE) ©️ [Anand Chowdhary](https://anandchowdhary.com)
+[MIT](./LICENSE)
+
+**Original Project**: [Anand Chowdhary](https://anandchowdhary.com) - [continuous-claude](https://github.com/AnandChowdhary/continuous-claude)
+
+**v2.0 Multi-Agent System**: [primadonna-gpters](https://github.com/primadonna-gpters/continuous-claude)

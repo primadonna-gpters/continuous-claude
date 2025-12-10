@@ -1,6 +1,6 @@
 #!/bin/bash
 
-VERSION="v0.14.0"
+VERSION="v2.0.0"
 
 ADDITIONAL_FLAGS="--dangerously-skip-permissions --output-format json"
 
@@ -179,6 +179,15 @@ OPTIONAL FLAGS:
 COMMANDS:
     update                        Check for and install the latest version
 
+MULTI-AGENT SYSTEM (v2.0):
+    swarm                         Run multi-agent swarm for collaborative tasks
+    dashboard                     Manage real-time monitoring dashboard
+    review                        Automated code review with static analysis
+    learn                         Manage failure learning system
+    agents                        Manage agent personas
+
+    Run 'continuous-claude <command> --help' for detailed command usage.
+
 EXAMPLES:
     # Run 5 iterations to fix bugs
     continuous-claude -p "Fix all linter errors" -m 5 --owner myuser --repo myproject
@@ -222,6 +231,27 @@ EXAMPLES:
 
     # Check for and install updates
     continuous-claude update
+
+    # === Multi-Agent System Examples ===
+
+    # Run a swarm with developer, tester, and reviewer agents
+    continuous-claude swarm -p "Build user authentication" -m pipeline
+
+    # Run swarm with custom agents and auto-merge
+    continuous-claude swarm -p "Add API endpoints" -a "developer tester" --auto-merge
+
+    # Start the real-time dashboard
+    continuous-claude dashboard start 8000
+
+    # Review a PR with static analysis
+    continuous-claude review 123 --submit
+
+    # Initialize learning system and install pre-built insights
+    continuous-claude learn init
+    continuous-claude learn install-prebuilt
+
+    # List available agent personas
+    continuous-claude agents list
 
 REQUIREMENTS:
     - Claude Code CLI (https://claude.ai/code)
@@ -1674,7 +1704,7 @@ show_completion_summary() {
         local elapsed_time=$((current_time - start_time))
         elapsed_msg=" (elapsed: $(format_duration $elapsed_time))"
     fi
-    
+
     # Show completion signal message if that's why we stopped
     if [ $completion_signal_count -ge $COMPLETION_THRESHOLD ]; then
         if [ -n "$total_cost" ] && [ "$(awk "BEGIN {print ($total_cost > 0)}")" = "1" ]; then
@@ -1685,21 +1715,397 @@ show_completion_summary() {
     elif [ -n "$MAX_RUNS" ] && [ $MAX_RUNS -ne 0 ] || [ -n "$MAX_COST" ] || [ -n "$MAX_DURATION" ]; then
         if [ -n "$total_cost" ] && [ "$(awk "BEGIN {print ($total_cost > 0)}")" = "1" ]; then
             printf "🎉 Done with total cost: \$%.3f%s\n" "$total_cost" "$elapsed_msg"
-        else 
+        else
             printf "🎉 Done%s\n" "$elapsed_msg"
         fi
     fi
 }
 
-main() {
-    # Handle "update" command before parsing arguments
-    if [ "$1" = "update" ]; then
-        shift
-        parse_update_flags "$@"
-        handle_update_command
-        exit 0
+# =============================================================================
+# Subcommand Handlers (Multi-Agent System v2.0)
+# =============================================================================
+
+# Get the directory where the script is located
+get_script_dir() {
+    local source="${BASH_SOURCE[0]}"
+    while [ -L "$source" ]; do
+        local dir="$(cd -P "$(dirname "$source")" && pwd)"
+        source="$(readlink "$source")"
+        [[ $source != /* ]] && source="$dir/$source"
+    done
+    echo "$(cd -P "$(dirname "$source")" && pwd)"
+}
+
+SCRIPT_DIR="$(get_script_dir)"
+# Support environment variables set by install.sh wrapper
+LIB_DIR="${CONTINUOUS_CLAUDE_LIB_DIR:-${SCRIPT_DIR}/lib}"
+PERSONAS_DIR="${CONTINUOUS_CLAUDE_PERSONAS_DIR:-${SCRIPT_DIR}/personas}"
+
+# Handle "swarm" subcommand - Multi-Agent Swarm
+handle_swarm_command() {
+    if [ ! -f "${LIB_DIR}/coordination.sh" ]; then
+        echo "Error: Multi-agent system not found at ${LIB_DIR}/coordination.sh" >&2
+        echo "Please ensure you have the full continuous-claude installation." >&2
+        exit 1
     fi
-    
+
+    source "${LIB_DIR}/coordination.sh"
+
+    local prompt=""
+    local mode="pipeline"
+    local agents="developer tester reviewer"
+    local auto_merge="false"
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -p|--prompt)
+                prompt="$2"
+                shift 2
+                ;;
+            -m|--mode)
+                mode="$2"
+                shift 2
+                ;;
+            -a|--agents)
+                agents="$2"
+                shift 2
+                ;;
+            --auto-merge)
+                auto_merge="true"
+                shift
+                ;;
+            --status)
+                print_coordination_dashboard
+                exit 0
+                ;;
+            -h|--help)
+                echo "Usage: continuous-claude swarm [options]"
+                echo ""
+                echo "Run a multi-agent swarm to collaboratively complete a task."
+                echo ""
+                echo "Options:"
+                echo "  -p, --prompt <text>    Task prompt (required)"
+                echo "  -m, --mode <mode>      Coordination mode: pipeline, parallel, adaptive (default: pipeline)"
+                echo "  -a, --agents <list>    Space-separated agent list (default: 'developer tester reviewer')"
+                echo "  --auto-merge           Auto-merge PRs when approved"
+                echo "  --status               Show current swarm status and exit"
+                echo "  -h, --help             Show this help message"
+                echo ""
+                echo "Examples:"
+                echo "  continuous-claude swarm -p 'Build auth system' -m pipeline"
+                echo "  continuous-claude swarm -p 'Add tests' -a 'developer tester' --auto-merge"
+                exit 0
+                ;;
+            *)
+                echo "Unknown option: $1" >&2
+                echo "Use 'continuous-claude swarm --help' for usage information." >&2
+                exit 1
+                ;;
+        esac
+    done
+
+    if [ -z "$prompt" ]; then
+        echo "Error: --prompt is required" >&2
+        echo "Use 'continuous-claude swarm --help' for usage information." >&2
+        exit 1
+    fi
+
+    export AUTO_MERGE="$auto_merge"
+    run_swarm "$prompt" "$mode" "$agents"
+}
+
+# Handle "dashboard" subcommand - Dashboard Management
+handle_dashboard_command() {
+    if [ ! -f "${LIB_DIR}/dashboard.sh" ]; then
+        echo "Error: Dashboard module not found at ${LIB_DIR}/dashboard.sh" >&2
+        exit 1
+    fi
+
+    local subcmd="${1:-help}"
+    shift 2>/dev/null || true
+
+    case "$subcmd" in
+        start)
+            local port="${1:-8000}"
+            "${LIB_DIR}/dashboard.sh" start "$port"
+            ;;
+        stop)
+            "${LIB_DIR}/dashboard.sh" stop
+            ;;
+        restart)
+            local port="${1:-8000}"
+            "${LIB_DIR}/dashboard.sh" restart "$port"
+            ;;
+        status)
+            "${LIB_DIR}/dashboard.sh" status
+            ;;
+        url)
+            "${LIB_DIR}/dashboard.sh" url
+            ;;
+        help|--help|-h)
+            echo "Usage: continuous-claude dashboard <command> [options]"
+            echo ""
+            echo "Manage the real-time monitoring dashboard."
+            echo ""
+            echo "Commands:"
+            echo "  start [port]    Start dashboard server (default port: 8000)"
+            echo "  stop            Stop dashboard server"
+            echo "  restart [port]  Restart dashboard server"
+            echo "  status          Check if dashboard is running"
+            echo "  url             Get dashboard URL"
+            echo ""
+            echo "Examples:"
+            echo "  continuous-claude dashboard start"
+            echo "  continuous-claude dashboard start 3000"
+            echo "  continuous-claude dashboard stop"
+            ;;
+        *)
+            echo "Unknown dashboard command: $subcmd" >&2
+            echo "Use 'continuous-claude dashboard help' for usage information." >&2
+            exit 1
+            ;;
+    esac
+}
+
+# Handle "review" subcommand - Code Review
+handle_review_command() {
+    if [ ! -f "${LIB_DIR}/review.sh" ]; then
+        echo "Error: Review module not found at ${LIB_DIR}/review.sh" >&2
+        exit 1
+    fi
+
+    source "${LIB_DIR}/review.sh"
+
+    local pr_number=""
+    local repo=""
+    local submit=""
+    local analyze_dir=""
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --submit)
+                submit="--submit"
+                shift
+                ;;
+            --repo|-r)
+                repo="$2"
+                shift 2
+                ;;
+            --analyze)
+                analyze_dir="$2"
+                shift 2
+                ;;
+            -h|--help)
+                echo "Usage: continuous-claude review <pr_number> [options]"
+                echo "       continuous-claude review --analyze <directory>"
+                echo ""
+                echo "Automated code review with static analysis."
+                echo ""
+                echo "Options:"
+                echo "  <pr_number>           PR number to review"
+                echo "  -r, --repo <repo>     Repository (owner/repo format)"
+                echo "  --submit              Submit review to GitHub"
+                echo "  --analyze <dir>       Run static analysis only on directory"
+                echo "  -h, --help            Show this help message"
+                echo ""
+                echo "Examples:"
+                echo "  continuous-claude review 123"
+                echo "  continuous-claude review 123 --submit"
+                echo "  continuous-claude review 123 -r owner/repo --submit"
+                echo "  continuous-claude review --analyze ./src"
+                exit 0
+                ;;
+            *)
+                if [[ "$1" =~ ^[0-9]+$ ]]; then
+                    pr_number="$1"
+                else
+                    echo "Unknown option: $1" >&2
+                    exit 1
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [ -n "$analyze_dir" ]; then
+        run_static_analysis "$analyze_dir"
+    elif [ -n "$pr_number" ]; then
+        review_pr "$pr_number" "$repo" "$submit"
+    else
+        echo "Error: PR number or --analyze required" >&2
+        echo "Use 'continuous-claude review --help' for usage information." >&2
+        exit 1
+    fi
+}
+
+# Handle "learn" subcommand - Learning System
+handle_learn_command() {
+    if [ ! -f "${LIB_DIR}/learning.sh" ]; then
+        echo "Error: Learning module not found at ${LIB_DIR}/learning.sh" >&2
+        exit 1
+    fi
+
+    source "${LIB_DIR}/learning.sh"
+
+    local subcmd="${1:-help}"
+    shift 2>/dev/null || true
+
+    case "$subcmd" in
+        init)
+            init_learning_db
+            echo "Learning database initialized."
+            ;;
+        install-prebuilt)
+            install_prebuilt_insights
+            echo "Pre-built insights installed."
+            ;;
+        stats)
+            get_failure_stats "$1"
+            ;;
+        insights)
+            get_relevant_insights "$1" "$2" "${3:-10}"
+            ;;
+        effectiveness)
+            get_insight_effectiveness
+            ;;
+        capture)
+            if [ $# -lt 5 ]; then
+                echo "Usage: continuous-claude learn capture <session> <agent> <iteration> <type> <message> [files]" >&2
+                exit 1
+            fi
+            capture_failure "$1" "$2" "$3" "$4" "$5" "${6:-[]}"
+            ;;
+        parse-ci)
+            if [ -n "$1" ]; then
+                parse_ci_failure "$1"
+            else
+                parse_ci_failure ""
+            fi
+            ;;
+        help|--help|-h)
+            echo "Usage: continuous-claude learn <command> [options]"
+            echo ""
+            echo "Manage the failure learning system."
+            echo ""
+            echo "Commands:"
+            echo "  init                Initialize learning database"
+            echo "  install-prebuilt    Install common pre-built insights"
+            echo "  stats [session]     Show failure statistics"
+            echo "  insights [type]     List relevant insights"
+            echo "  effectiveness       Show insight effectiveness metrics"
+            echo "  capture             Capture a failure manually"
+            echo "  parse-ci [file]     Parse CI log for failures (or stdin)"
+            echo ""
+            echo "Examples:"
+            echo "  continuous-claude learn init"
+            echo "  continuous-claude learn install-prebuilt"
+            echo "  continuous-claude learn stats"
+            echo "  continuous-claude learn parse-ci < ci.log"
+            ;;
+        *)
+            echo "Unknown learn command: $subcmd" >&2
+            echo "Use 'continuous-claude learn help' for usage information." >&2
+            exit 1
+            ;;
+    esac
+}
+
+# Handle "agents" subcommand - Agent Management
+handle_agents_command() {
+    if [ ! -f "${LIB_DIR}/personas.sh" ]; then
+        echo "Error: Personas module not found at ${LIB_DIR}/personas.sh" >&2
+        exit 1
+    fi
+
+    source "${LIB_DIR}/personas.sh"
+
+    local subcmd="${1:-list}"
+    shift 2>/dev/null || true
+
+    case "$subcmd" in
+        list)
+            list_personas
+            ;;
+        info)
+            if [ -z "$1" ]; then
+                echo "Usage: continuous-claude agents info <persona_id>" >&2
+                exit 1
+            fi
+            load_persona "$1"
+            ;;
+        help|--help|-h)
+            echo "Usage: continuous-claude agents <command> [options]"
+            echo ""
+            echo "Manage agent personas."
+            echo ""
+            echo "Commands:"
+            echo "  list              List all available personas"
+            echo "  info <persona>    Show details for a specific persona"
+            echo ""
+            echo "Available Personas:"
+            echo "  developer    🧑‍💻  Feature implementation, bug fixes"
+            echo "  tester       🧪  Test writing, coverage analysis"
+            echo "  reviewer     👁️   Code review, quality gates"
+            echo "  documenter   📚  Documentation, README updates"
+            echo "  security     🔒  Security scanning, vulnerability fixes"
+            ;;
+        *)
+            echo "Unknown agents command: $subcmd" >&2
+            echo "Use 'continuous-claude agents help' for usage information." >&2
+            exit 1
+            ;;
+    esac
+}
+
+# Show help for all subcommands
+show_subcommands_help() {
+    echo ""
+    echo "Subcommands (Multi-Agent System v2.0):"
+    echo "  swarm       Run multi-agent swarm for collaborative tasks"
+    echo "  dashboard   Manage real-time monitoring dashboard"
+    echo "  review      Automated code review with static analysis"
+    echo "  learn       Manage failure learning system"
+    echo "  agents      Manage agent personas"
+    echo ""
+    echo "Run 'continuous-claude <subcommand> --help' for more information."
+}
+
+main() {
+    # Handle subcommands before parsing regular arguments
+    case "$1" in
+        update)
+            shift
+            parse_update_flags "$@"
+            handle_update_command
+            exit 0
+            ;;
+        swarm)
+            shift
+            handle_swarm_command "$@"
+            exit 0
+            ;;
+        dashboard)
+            shift
+            handle_dashboard_command "$@"
+            exit 0
+            ;;
+        review)
+            shift
+            handle_review_command "$@"
+            exit 0
+            ;;
+        learn)
+            shift
+            handle_learn_command "$@"
+            exit 0
+            ;;
+        agents)
+            shift
+            handle_agents_command "$@"
+            exit 0
+            ;;
+    esac
+
     parse_arguments "$@"
     validate_arguments
     validate_requirements

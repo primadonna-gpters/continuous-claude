@@ -1,0 +1,420 @@
+#!/usr/bin/env bash
+# =============================================================================
+# coordination.sh - Agent Coordination and Communication Layer
+# =============================================================================
+# High-level coordination functions that integrate messaging, personas,
+# worktrees, conflicts, and orchestration into a unified API.
+# =============================================================================
+
+# Source all dependencies
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/messaging.sh"
+source "${SCRIPT_DIR}/personas.sh"
+source "${SCRIPT_DIR}/worktrees.sh"
+source "${SCRIPT_DIR}/conflicts.sh"
+source "${SCRIPT_DIR}/orchestrator.sh"
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+COORDINATION_MODE="${COORDINATION_MODE:-pipeline}"  # pipeline, parallel, adaptive
+AUTO_MERGE="${AUTO_MERGE:-false}"
+
+# =============================================================================
+# Workflow Definitions
+# =============================================================================
+
+# Standard development workflow:
+# developer -> tester -> reviewer -> (merge or developer)
+WORKFLOW_PIPELINE="developer:tester:reviewer"
+
+# Parallel workflow with sync points
+WORKFLOW_PARALLEL="developer,tester:reviewer"
+
+# =============================================================================
+# Agent Communication Helpers
+# =============================================================================
+
+# Notify next agent in pipeline
+# Usage: notify_next_agent <current_agent> <signal_type> [payload_json]
+notify_next_agent() {
+    local current_agent="$1"
+    local signal_type="$2"
+    local payload="${3:-"{}"}"
+
+    local next_agent
+    next_agent=$(get_next_in_pipeline "$current_agent")
+
+    if [[ -z "$next_agent" ]]; then
+        echo "No next agent in pipeline for: ${current_agent}" >&2
+        return 1
+    fi
+
+    # Process signal through orchestrator
+    process_agent_signal "$current_agent" "$signal_type" "$payload"
+
+    echo "Notified ${next_agent} of ${signal_type} from ${current_agent}"
+}
+
+# Get next agent in pipeline
+get_next_in_pipeline() {
+    local current="$1"
+
+    case "$current" in
+        developer) echo "tester" ;;
+        tester) echo "reviewer" ;;
+        reviewer) echo "" ;;  # End of pipeline
+        *) echo "" ;;
+    esac
+}
+
+# Get previous agent in pipeline
+get_previous_in_pipeline() {
+    local current="$1"
+
+    case "$current" in
+        developer) echo "" ;;  # Start of pipeline
+        tester) echo "developer" ;;
+        reviewer) echo "tester" ;;
+        *) echo "" ;;
+    esac
+}
+
+# =============================================================================
+# Event Handlers
+# =============================================================================
+
+# Handle developer completion
+# Usage: on_developer_complete <feature_name> <files_json> [notes]
+on_developer_complete() {
+    local feature="$1"
+    local files="$2"
+    local notes="${3:-}"
+
+    echo "📦 Developer completed: ${feature}"
+
+    # Update task status
+    local tasks
+    tasks=$(cat "${SWARM_DIR}/state/tasks.json" 2>/dev/null || echo "[]")
+    local task_id
+    task_id=$(echo "$tasks" | jq -r '[.[] | select(.agent == "developer" and .status == "in_progress")][0].id // empty')
+
+    if [[ -n "$task_id" ]]; then
+        update_task_status "$task_id" "completed" "{\"feature\": \"$feature\"}"
+    fi
+
+    # Notify tester
+    process_agent_signal "developer" "feature_complete" \
+        "$(jq -n --arg f "$feature" --argjson files "$files" --arg notes "$notes" \
+        '{feature: $f, files: $files, notes: $notes}')"
+}
+
+# Handle tester completion
+# Usage: on_tests_complete <passed|failed> <summary_json> [details_json]
+on_tests_complete() {
+    local status="$1"
+    local summary="$2"
+    local details="${3:-"{}"}"
+
+    if [[ "$status" == "passed" ]]; then
+        echo "✅ Tests passed!"
+        process_agent_signal "tester" "tests_passed" \
+            "$(jq -n --argjson s "$summary" '{summary: $s}')"
+    else
+        echo "❌ Tests failed!"
+        process_agent_signal "tester" "tests_failed" \
+            "$(jq -n --argjson s "$summary" --argjson d "$details" \
+            '{summary: $s, details: $d}')"
+    fi
+}
+
+# Handle reviewer decision
+# Usage: on_review_complete <approved|changes_requested> <comments_json> [pr_number]
+on_review_complete() {
+    local decision="$1"
+    local comments="$2"
+    local pr_number="${3:-}"
+
+    if [[ "$decision" == "approved" ]]; then
+        echo "✅ Code approved!"
+
+        if [[ "$AUTO_MERGE" == "true" && -n "$pr_number" ]]; then
+            echo "🔀 Auto-merging PR #${pr_number}..."
+            # TODO: Implement actual merge
+        fi
+
+        process_agent_signal "reviewer" "review_approved" \
+            "$(jq -n --arg pr "$pr_number" --argjson c "$comments" \
+            '{pr_number: $pr, comments: $c}')"
+    else
+        echo "📝 Changes requested"
+        process_agent_signal "reviewer" "review_changes_requested" \
+            "$(jq -n --argjson c "$comments" '{comments: $c}')"
+    fi
+}
+
+# =============================================================================
+# Coordination Modes
+# =============================================================================
+
+# Run in pipeline mode (sequential)
+# Usage: run_pipeline <prompt>
+run_pipeline() {
+    local prompt="$1"
+
+    echo "🔄 Running in PIPELINE mode"
+    echo "   Flow: developer → tester → reviewer"
+    echo ""
+
+    # Initialize swarm
+    init_swarm "developer tester reviewer" "$prompt"
+
+    # Distribute initial task to developer
+    distribute_initial_tasks "$prompt"
+}
+
+# Run in parallel mode (concurrent where possible)
+# Usage: run_parallel <prompt>
+run_parallel() {
+    local prompt="$1"
+
+    echo "⚡ Running in PARALLEL mode"
+    echo "   Developer and Tester can work concurrently"
+    echo ""
+
+    # Initialize swarm
+    init_swarm "developer tester reviewer" "$prompt"
+
+    # Start both developer and tester
+    start_agent "developer"
+    start_agent "tester"
+
+    # Add tasks for both
+    add_task "implementation" "developer" "$prompt" 1
+    add_task "test_planning" "tester" "Plan tests for: $prompt" 2
+}
+
+# Run in adaptive mode (dynamically adjust based on progress)
+# Usage: run_adaptive <prompt>
+run_adaptive() {
+    local prompt="$1"
+
+    echo "🧠 Running in ADAPTIVE mode"
+    echo "   Will adjust strategy based on progress"
+    echo ""
+
+    # Start as pipeline, can switch to parallel if no conflicts
+    run_pipeline "$prompt"
+}
+
+# =============================================================================
+# Status and Monitoring
+# =============================================================================
+
+# Get comprehensive coordination status
+get_coordination_status() {
+    local swarm_status
+    swarm_status=$(get_swarm_status_json)
+
+    local conflicts
+    conflicts=$(detect_all_conflicts)
+
+    local worktrees
+    worktrees=$(get_worktrees_json)
+
+    jq -n \
+        --argjson swarm "$swarm_status" \
+        --argjson conflicts "$conflicts" \
+        --argjson worktrees "$worktrees" \
+        --arg mode "$COORDINATION_MODE" \
+        --arg auto_merge "$AUTO_MERGE" \
+        '{
+            mode: $mode,
+            auto_merge: ($auto_merge == "true"),
+            swarm: $swarm,
+            conflicts: $conflicts,
+            worktrees: $worktrees
+        }'
+}
+
+# Print coordination dashboard
+print_coordination_dashboard() {
+    clear 2>/dev/null || true
+
+    echo "╔═══════════════════════════════════════════════════════════════╗"
+    echo "║            🐝 CONTINUOUS CLAUDE SWARM DASHBOARD               ║"
+    echo "╠═══════════════════════════════════════════════════════════════╣"
+
+    local session
+    session=$(get_session_state)
+    local session_id
+    session_id=$(echo "$session" | jq -r '.session_id // "N/A"')
+    local status
+    status=$(echo "$session" | jq -r '.status // "N/A"')
+
+    printf "║ Session: %-20s Mode: %-20s ║\n" "$session_id" "$COORDINATION_MODE"
+    printf "║ Status: %-21s Auto-Merge: %-15s ║\n" "$status" "$AUTO_MERGE"
+    echo "╠═══════════════════════════════════════════════════════════════╣"
+
+    # Agent Status
+    echo "║                         AGENTS                                ║"
+    echo "╟───────────────────────────────────────────────────────────────╢"
+
+    local agents_state
+    agents_state=$(get_all_agents_state)
+
+    for agent_id in $(echo "$agents_state" | jq -r 'keys[]' | sort); do
+        local agent_status emoji iteration unread
+        agent_status=$(echo "$agents_state" | jq -r --arg id "$agent_id" '.[$id].status // "?"')
+        emoji=$(echo "$agents_state" | jq -r --arg id "$agent_id" '.[$id].emoji // "?"')
+        iteration=$(echo "$agents_state" | jq -r --arg id "$agent_id" '.[$id].iteration // 0')
+        unread=$(get_unread_count "$agent_id")
+
+        local status_icon
+        case "$agent_status" in
+            running) status_icon="🟢" ;;
+            waiting) status_icon="🟡" ;;
+            registered) status_icon="⚪" ;;
+            stopped) status_icon="🔴" ;;
+            *) status_icon="⚫" ;;
+        esac
+
+        printf "║ %s %s %-10s  %s %-12s  Iter: %-3s  📬 %-3s        ║\n" \
+            "$status_icon" "$emoji" "$agent_id" " " "$agent_status" "$iteration" "$unread"
+    done
+
+    echo "╠═══════════════════════════════════════════════════════════════╣"
+
+    # Task Queue
+    local task_summary
+    task_summary=$(get_task_queue_summary)
+    local pending in_progress completed failed
+    pending=$(echo "$task_summary" | jq -r '.pending')
+    in_progress=$(echo "$task_summary" | jq -r '.in_progress')
+    completed=$(echo "$task_summary" | jq -r '.completed')
+    failed=$(echo "$task_summary" | jq -r '.failed')
+
+    echo "║                       TASK QUEUE                              ║"
+    echo "╟───────────────────────────────────────────────────────────────╢"
+    printf "║   ⏳ Pending: %-5s  🔄 In Progress: %-5s                    ║\n" "$pending" "$in_progress"
+    printf "║   ✅ Done: %-8s  ❌ Failed: %-8s                       ║\n" "$completed" "$failed"
+
+    echo "╠═══════════════════════════════════════════════════════════════╣"
+
+    # Conflicts
+    local conflicts
+    conflicts=$(detect_all_conflicts)
+    local conflict_count
+    conflict_count=$(echo "$conflicts" | jq 'length')
+
+    echo "║                      CONFLICTS                                ║"
+    echo "╟───────────────────────────────────────────────────────────────╢"
+
+    if [[ "$conflict_count" -gt 0 ]]; then
+        echo "$conflicts" | jq -r '.[] | "║   ⚠️  \(.agents | join(" vs ")) on \(.files | join(", "))"' | head -3
+    else
+        echo "║   ✅ No conflicts detected                                    ║"
+    fi
+
+    echo "╚═══════════════════════════════════════════════════════════════╝"
+}
+
+# =============================================================================
+# Swarm Runner
+# =============================================================================
+
+# Main entry point for running a swarm task
+# Usage: run_swarm <prompt> [mode] [agents]
+run_swarm() {
+    local prompt="$1"
+    local mode="${2:-$COORDINATION_MODE}"
+    local agents="${3:-developer tester reviewer}"
+
+    export COORDINATION_MODE="$mode"
+    export SWARM_SESSION_ID="${SWARM_SESSION_ID:-$(date +%Y%m%d-%H%M%S)}"
+
+    echo "🚀 Starting Continuous Claude Swarm"
+    echo "   Session: ${SWARM_SESSION_ID}"
+    echo "   Mode: ${mode}"
+    echo "   Agents: ${agents}"
+    echo ""
+
+    case "$mode" in
+        pipeline)
+            run_pipeline "$prompt"
+            ;;
+        parallel)
+            run_parallel "$prompt"
+            ;;
+        adaptive)
+            run_adaptive "$prompt"
+            ;;
+        *)
+            echo "Error: Unknown mode: ${mode}" >&2
+            return 1
+            ;;
+    esac
+
+    echo ""
+    print_coordination_dashboard
+}
+
+# =============================================================================
+# CLI Interface
+# =============================================================================
+
+coordination_cli() {
+    local cmd="${1:-help}"
+    shift || true
+
+    case "$cmd" in
+        run)
+            run_swarm "${1:-}" "${2:-pipeline}" "${3:-}"
+            ;;
+        status)
+            get_coordination_status | jq .
+            ;;
+        dashboard)
+            print_coordination_dashboard
+            ;;
+        on-dev-complete)
+            on_developer_complete "${1:-}" "${2:-[]}" "${3:-}"
+            ;;
+        on-tests-complete)
+            on_tests_complete "${1:-passed}" "${2:-"{}"}" "${3:-"{}"}"
+            ;;
+        on-review-complete)
+            on_review_complete "${1:-approved}" "${2:-[]}" "${3:-}"
+            ;;
+        notify)
+            notify_next_agent "${1:-}" "${2:-}" "${3:-"{}"}"
+            ;;
+        help|*)
+            echo "Usage: coordination.sh <command> [args]"
+            echo ""
+            echo "Commands:"
+            echo "  run <prompt> [mode] [agents]    Start a swarm task"
+            echo "    Modes: pipeline, parallel, adaptive"
+            echo ""
+            echo "  status                          Get coordination status as JSON"
+            echo "  dashboard                       Print coordination dashboard"
+            echo ""
+            echo "Event Handlers:"
+            echo "  on-dev-complete <feature> <files_json> [notes]"
+            echo "  on-tests-complete <passed|failed> <summary> [details]"
+            echo "  on-review-complete <approved|changes_requested> <comments> [pr]"
+            echo ""
+            echo "  notify <agent> <signal> [payload]"
+            echo ""
+            echo "Environment Variables:"
+            echo "  COORDINATION_MODE    Default mode (pipeline/parallel/adaptive)"
+            echo "  AUTO_MERGE           Auto-merge on approval (true/false)"
+            ;;
+    esac
+}
+
+# Run CLI if script is executed directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    coordination_cli "$@"
+fi

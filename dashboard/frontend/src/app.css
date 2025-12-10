@@ -1,0 +1,182 @@
+/* =============================================================================
+   Continuous Claude Dashboard - Global Styles
+   ============================================================================= */
+
+:root {
+	/* Colors */
+	--color-bg: #0f0f0f;
+	--color-bg-secondary: #1a1a1a;
+	--color-bg-tertiary: #252525;
+	--color-text: #e0e0e0;
+	--color-text-secondary: #888;
+	--color-border: #333;
+
+	/* Status Colors */
+	--color-success: #22c55e;
+	--color-warning: #f59e0b;
+	--color-error: #ef4444;
+	--color-info: #3b82f6;
+
+	/* Agent Status Colors */
+	--color-running: #22c55e;
+	--color-waiting: #f59e0b;
+	--color-idle: #6b7280;
+	--color-error-agent: #ef4444;
+
+	/* Spacing */
+	--spacing-xs: 0.25rem;
+	--spacing-sm: 0.5rem;
+	--spacing-md: 1rem;
+	--spacing-lg: 1.5rem;
+	--spacing-xl: 2rem;
+
+	/* Border Radius */
+	--radius-sm: 4px;
+	--radius-md: 8px;
+	--radius-lg: 12px;
+
+	/* Typography */
+	--font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+	--font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+* {
+	box-sizing: border-box;
+	margin: 0;
+	padding: 0;
+}
+
+html, body {
+	height: 100%;
+	font-family: var(--font-sans);
+	background-color: var(--color-bg);
+	color: var(--color-text);
+	line-height: 1.5;
+}
+
+/* Typography */
+h1, h2, h3, h4, h5, h6 {
+	font-weight: 600;
+	line-height: 1.2;
+}
+
+h1 { font-size: 1.75rem; }
+h2 { font-size: 1.5rem; }
+h3 { font-size: 1.25rem; }
+
+code, pre {
+	font-family: var(--font-mono);
+}
+
+/* Cards */
+.card {
+	background-color: var(--color-bg-secondary);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-md);
+	padding: var(--spacing-md);
+}
+
+.card-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: var(--spacing-md);
+	padding-bottom: var(--spacing-sm);
+	border-bottom: 1px solid var(--color-border);
+}
+
+/* Status Badges */
+.badge {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--spacing-xs);
+	padding: var(--spacing-xs) var(--spacing-sm);
+	border-radius: var(--radius-sm);
+	font-size: 0.75rem;
+	font-weight: 500;
+	text-transform: uppercase;
+}
+
+.badge-success { background: rgba(34, 197, 94, 0.2); color: var(--color-success); }
+.badge-warning { background: rgba(245, 158, 11, 0.2); color: var(--color-warning); }
+.badge-error { background: rgba(239, 68, 68, 0.2); color: var(--color-error); }
+.badge-info { background: rgba(59, 130, 246, 0.2); color: var(--color-info); }
+.badge-neutral { background: rgba(107, 114, 128, 0.2); color: var(--color-text-secondary); }
+
+/* Status Indicators */
+.status-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	display: inline-block;
+}
+
+.status-dot.running { background-color: var(--color-running); animation: pulse 2s infinite; }
+.status-dot.waiting { background-color: var(--color-waiting); }
+.status-dot.idle { background-color: var(--color-idle); }
+.status-dot.error { background-color: var(--color-error-agent); }
+
+@keyframes pulse {
+	0%, 100% { opacity: 1; }
+	50% { opacity: 0.5; }
+}
+
+/* Grid Layout */
+.grid {
+	display: grid;
+	gap: var(--spacing-md);
+}
+
+.grid-cols-2 { grid-template-columns: repeat(2, 1fr); }
+.grid-cols-3 { grid-template-columns: repeat(3, 1fr); }
+.grid-cols-4 { grid-template-columns: repeat(4, 1fr); }
+
+/* Flex Utilities */
+.flex { display: flex; }
+.flex-col { flex-direction: column; }
+.items-center { align-items: center; }
+.justify-between { justify-content: space-between; }
+.gap-sm { gap: var(--spacing-sm); }
+.gap-md { gap: var(--spacing-md); }
+
+/* Scrollbar */
+::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+
+::-webkit-scrollbar-track {
+	background: var(--color-bg);
+}
+
+::-webkit-scrollbar-thumb {
+	background: var(--color-border);
+	border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: #444;
+}
+
+/* Log Styles */
+.log-entry {
+	font-family: var(--font-mono);
+	font-size: 0.8125rem;
+	padding: var(--spacing-xs) var(--spacing-sm);
+	border-radius: var(--radius-sm);
+}
+
+.log-entry.info { background: rgba(59, 130, 246, 0.1); }
+.log-entry.warning { background: rgba(245, 158, 11, 0.1); }
+.log-entry.error { background: rgba(239, 68, 68, 0.1); }
+.log-entry.debug { background: rgba(107, 114, 128, 0.1); }
+
+.log-timestamp {
+	color: var(--color-text-secondary);
+	margin-right: var(--spacing-sm);
+}
+
+.log-agent {
+	color: var(--color-info);
+	margin-right: var(--spacing-sm);
+}

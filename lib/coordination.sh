@@ -162,7 +162,7 @@ on_review_complete() {
 # Usage: run_pipeline <prompt> [agents] [max_runs]
 run_pipeline() {
     local prompt="$1"
-    local agents="${2:-developer tester reviewer}"
+    local agents="${2:-planner developer tester reviewer}"
     local max_runs="${3:-5}"
 
     echo "🔄 Running in PIPELINE mode"
@@ -177,15 +177,24 @@ run_pipeline() {
 # Usage: run_parallel <prompt> [agents] [max_runs]
 run_parallel() {
     local prompt="$1"
-    local agents="${2:-developer tester reviewer}"
+    local agents="${2:-planner developer tester reviewer}"
     local max_runs="${3:-5}"
 
     echo "⚡ Running in PARALLEL mode"
-    echo "   Agents will run concurrently (where possible)"
+    echo "   Flow: planner → (developer ∥ tester) → reviewer"
     echo ""
 
-    # For now, run developer and tester in parallel, then reviewer
-    # Run developer and tester in background
+    # 1. Planner runs first (others depend on the plan)
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  Phase 1: Planning"
+    echo "═══════════════════════════════════════════════════════════════"
+    execute_agent "planner" "$prompt" "$max_runs"
+
+    # 2. Developer and tester run in parallel
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  Phase 2: Development & Testing (parallel)"
+    echo "═══════════════════════════════════════════════════════════════"
     (execute_agent "developer" "$prompt" "$max_runs") &
     local dev_pid=$!
 
@@ -196,7 +205,11 @@ run_parallel() {
     echo "⏳ Waiting for developer and tester to complete..."
     wait $dev_pid $test_pid
 
-    # Then run reviewer sequentially
+    # 3. Reviewer runs last
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  Phase 3: Review"
+    echo "═══════════════════════════════════════════════════════════════"
     execute_agent "reviewer" "Review the code changes for: $prompt" "$max_runs"
 }
 
@@ -204,7 +217,7 @@ run_parallel() {
 # Usage: run_adaptive <prompt> [agents] [max_runs]
 run_adaptive() {
     local prompt="$1"
-    local agents="${2:-developer tester reviewer}"
+    local agents="${2:-planner developer tester reviewer}"
     local max_runs="${3:-5}"
 
     echo "🧠 Running in ADAPTIVE mode"
@@ -495,7 +508,7 @@ run_agent_pipeline() {
 run_swarm() {
     local prompt="$1"
     local mode="${2:-$COORDINATION_MODE}"
-    local agents="${3:-developer tester reviewer}"
+    local agents="${3:-planner developer tester reviewer}"
     local max_runs="${4:-5}"
 
     export COORDINATION_MODE="$mode"

@@ -73,6 +73,7 @@ echo ""
 echo "📥 Downloading persona definitions..."
 
 PERSONA_FILES=(
+    "planner.yaml"
     "developer.yaml"
     "tester.yaml"
     "reviewer.yaml"

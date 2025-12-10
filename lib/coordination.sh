@@ -854,8 +854,10 @@ Task: ${prompt:0:60}" 2>/dev/null || true
 
     # Push the branch
     echo "📤 Pushing branch: ${branch_name}" >&2
-    if ! git push -u origin "$branch_name" 2>&1; then
+    local push_output
+    if ! push_output=$(git push -u origin "$branch_name" 2>&1); then
         echo "⚠️  Failed to push branch" >&2
+        echo "$push_output" >&2
         return 1
     fi
 
@@ -998,8 +1000,9 @@ run_swarm() {
     local max_runs="${4:-5}"
 
     export COORDINATION_MODE="$mode"
-    # Use timestamp + PID + random for unique session ID
-    export SWARM_SESSION_ID="${SWARM_SESSION_ID:-$(date +%Y%m%d-%H%M%S)-$$-$(printf '%04x' $RANDOM)}"
+    # Always generate a unique session ID for swarm runs
+    # Format: YYYYMMDD-HHMMSS-PID-RANDOM (e.g., 20251210-143025-12345-a1b2)
+    export SWARM_SESSION_ID="$(date +%Y%m%d-%H%M%S)-$$-$(printf '%04x' $RANDOM)"
 
     echo "🚀 Starting Continuous Claude Swarm"
     echo "   Session: ${SWARM_SESSION_ID}"

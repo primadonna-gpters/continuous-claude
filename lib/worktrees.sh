@@ -8,7 +8,11 @@
 
 # Default configuration
 WORKTREE_BASE_DIR="${WORKTREE_BASE_DIR:-../continuous-claude-worktrees}"
-SWARM_SESSION_ID="${SWARM_SESSION_ID:-default}"
+# Note: SWARM_SESSION_ID is set by run_swarm() in coordination.sh
+# Only use fallback for standalone worktree operations
+if [[ -z "${SWARM_SESSION_ID:-}" ]]; then
+    SWARM_SESSION_ID="standalone-$(date +%H%M%S)"
+fi
 
 # =============================================================================
 # Helper Functions

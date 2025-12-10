@@ -337,43 +337,19 @@ execute_agent() {
     local agent_id="$1"
     local prompt="$2"
     local max_runs="${3:-5}"
+    local notes_file="SHARED_TASK_NOTES.md"
+    local completion_signal="CONTINUOUS_CLAUDE_PROJECT_COMPLETE"
 
     # Get persona prompt
     local persona_prompt
     persona_prompt=$(get_persona_prompt "$agent_id" 2>/dev/null || echo "")
-
-    # Build full prompt with persona context
-    local full_prompt
-    if [[ -n "$persona_prompt" ]]; then
-        full_prompt="## AGENT ROLE
-${persona_prompt}
-
-## TASK
-${prompt}
-
-## CRITICAL INSTRUCTIONS
-- DO NOT ask questions. Just do the work.
-- DO NOT wait for confirmation. Proceed with reasonable defaults.
-- Focus on your specific role as ${agent_id}
-- Make progress on the task immediately
-- Update SHARED_TASK_NOTES.md with what you accomplished
-- If the task is complete, include 'CONTINUOUS_CLAUDE_PROJECT_COMPLETE' in your response"
-    else
-        full_prompt="${prompt}
-
-## CRITICAL INSTRUCTIONS
-- DO NOT ask questions. Just do the work.
-- DO NOT wait for confirmation. Proceed with reasonable defaults.
-- Make progress on the task immediately
-- If the task is complete, include 'CONTINUOUS_CLAUDE_PROJECT_COMPLETE' in your response"
-    fi
 
     echo "🤖 [${agent_id}] Starting agent execution..."
 
     # Update agent state
     update_agent_state "$agent_id" "running"
 
-    # Run Claude Code
+    # Run Claude Code iterations
     local iteration=0
     while [[ $iteration -lt $max_runs ]]; do
         iteration=$((iteration + 1))
@@ -381,21 +357,106 @@ ${prompt}
 
         echo "🔄 [${agent_id}] Iteration ${iteration}/${max_runs}"
 
-        # Run claude with the prompt (--dangerously-skip-permissions for non-interactive)
-        local output
-        if output=$(claude --dangerously-skip-permissions --verbose -p "$full_prompt" 2>&1); then
-            echo "✅ [${agent_id}] Iteration ${iteration} complete"
-            echo "$output" | tail -10
-        else
-            echo "❌ [${agent_id}] Iteration ${iteration} failed"
-            echo "$output" | tail -10
+        # Build full prompt (similar to single mode)
+        local full_prompt="## CONTINUOUS WORKFLOW CONTEXT
+
+This is part of a continuous development loop where work happens incrementally across multiple iterations.
+
+**Important**: You don't need to complete the entire goal in one iteration. Just make meaningful progress on one thing, then leave clear notes for the next iteration.
+
+**Project Completion Signal**: If you determine that the ENTIRE project goal is fully complete, include the exact phrase \"${completion_signal}\" in your response."
+
+        # Add persona role if available
+        if [[ -n "$persona_prompt" ]]; then
+            full_prompt+="
+
+## AGENT ROLE (${agent_id})
+${persona_prompt}"
         fi
 
-        # Check for completion signal
-        if echo "$output" | grep -q "CONTINUOUS_CLAUDE_PROJECT_COMPLETE"; then
+        # Add primary goal
+        full_prompt+="
+
+## PRIMARY GOAL
+${prompt}"
+
+        # Add context from previous iterations if notes file exists
+        if [[ -f "$notes_file" ]]; then
+            local notes_content
+            notes_content=$(cat "$notes_file")
+            full_prompt+="
+
+## CONTEXT FROM PREVIOUS ITERATION
+
+The following is from ${notes_file}, maintained by previous iterations to provide context:
+
+${notes_content}"
+        fi
+
+        # Add iteration notes instructions
+        full_prompt+="
+
+## ITERATION NOTES
+
+"
+        if [[ -f "$notes_file" ]]; then
+            full_prompt+="Update the \`${notes_file}\` file with relevant context for the next iteration. Add new notes and remove outdated information to keep it current and useful."
+        else
+            full_prompt+="Create a \`${notes_file}\` file with relevant context and instructions for the next iteration."
+        fi
+
+        full_prompt+="
+
+This file helps coordinate work across iterations. It should:
+- Contain relevant context and instructions for the next iteration
+- Stay concise and actionable (like a notes file, not a detailed report)
+- Help the next developer understand what to do next
+
+## CRITICAL INSTRUCTIONS
+- DO NOT ask questions. Proceed with reasonable defaults.
+- DO NOT wait for confirmation. Just do the work.
+- Focus on your specific role as ${agent_id}
+- Make meaningful progress on the task
+- Update ${notes_file} with what you accomplished"
+
+        # Run claude with JSON output format (like single mode)
+        local temp_stdout=$(mktemp)
+        local temp_stderr=$(mktemp)
+        local exit_code=0
+
+        claude --dangerously-skip-permissions --output-format json -p "$full_prompt" >"$temp_stdout" 2>"$temp_stderr" || exit_code=$?
+
+        if [[ $exit_code -eq 0 ]]; then
+            echo "✅ [${agent_id}] Iteration ${iteration} complete"
+
+            # Try to parse cost from JSON output
+            local cost
+            cost=$(cat "$temp_stdout" | jq -r 'if type == "array" then .[-1] else . end | .cost_usd // .total_cost // 0' 2>/dev/null || echo "0")
+            if [[ "$cost" != "0" && "$cost" != "null" ]]; then
+                echo "   💰 Cost: \$${cost}"
+            fi
+
+            # Show last few lines of stderr (Claude's conversation output)
+            if [[ -s "$temp_stderr" ]]; then
+                echo "   📝 Output (last 5 lines):"
+                tail -5 "$temp_stderr" | sed 's/^/      /'
+            fi
+        else
+            echo "❌ [${agent_id}] Iteration ${iteration} failed (exit code: ${exit_code})"
+            if [[ -s "$temp_stderr" ]]; then
+                tail -10 "$temp_stderr"
+            fi
+        fi
+
+        # Check for completion signal in output
+        if grep -q "$completion_signal" "$temp_stdout" "$temp_stderr" 2>/dev/null; then
             echo "🎉 [${agent_id}] Agent signaled completion"
+            rm -f "$temp_stdout" "$temp_stderr"
             break
         fi
+
+        # Cleanup temp files
+        rm -f "$temp_stdout" "$temp_stderr"
 
         # Brief pause between iterations
         sleep 2

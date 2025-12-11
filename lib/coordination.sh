@@ -791,9 +791,8 @@ run_agent_pipeline() {
 
         # Phase 4: Review (reviewer decides if approved or changes needed)
         if [[ "$agents" == *"reviewer"* ]]; then
-            local reviewer_prompt
-            reviewer_prompt=$(build_agent_prompt "reviewer" "$prompt" "$pr_url")
-            run_agent_phase "reviewer" "$reviewer_prompt" "$max_runs" "Phase 4: Code Review"
+            # Note: run_agent_phase will use SWARM_PR_URL for reviewer prompt
+            run_agent_phase "reviewer" "$prompt" "$max_runs" "Phase 4: Code Review"
             local reviewer_result=$?
             push_agent_changes "reviewer"
 
@@ -869,8 +868,13 @@ run_agent_phase() {
     # Log activity
     log_activity "${phase_name} started"
 
+    # Build agent prompt (use SWARM_PR_URL for reviewer)
     local agent_prompt
-    agent_prompt=$(build_agent_prompt "$agent_id" "$prompt")
+    if [[ "$agent_id" == "reviewer" ]]; then
+        agent_prompt=$(build_agent_prompt "$agent_id" "$prompt" "${SWARM_PR_URL:-}")
+    else
+        agent_prompt=$(build_agent_prompt "$agent_id" "$prompt")
+    fi
 
     execute_agent "$agent_id" "$agent_prompt" "$max_runs"
     local result=$?

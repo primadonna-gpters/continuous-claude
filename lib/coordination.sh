@@ -157,26 +157,37 @@ merge_pr() {
 
     echo "⏳ Waiting for CI checks..." >&2
     while [[ $waited -lt $max_wait ]]; do
-        local checks_status
-        checks_status=$(gh pr checks "$pr" --json state --jq '.[].state' 2>/dev/null | sort -u)
+        local checks_json
+        checks_json=$(gh pr checks "$pr" --json name,state 2>/dev/null || echo "[]")
+        local total_checks pending_checks failed_checks success_checks
+        total_checks=$(echo "$checks_json" | jq 'length' 2>/dev/null || echo "0")
+        pending_checks=$(echo "$checks_json" | jq '[.[] | select(.state == "PENDING" or .state == "IN_PROGRESS")] | length' 2>/dev/null || echo "0")
+        failed_checks=$(echo "$checks_json" | jq '[.[] | select(.state == "FAILURE" or .state == "ERROR")] | length' 2>/dev/null || echo "0")
+        success_checks=$(echo "$checks_json" | jq '[.[] | select(.state == "SUCCESS")] | length' 2>/dev/null || echo "0")
 
-        if [[ -z "$checks_status" ]] || echo "$checks_status" | grep -q "SUCCESS"; then
-            # No checks or all passed
-            if ! echo "$checks_status" | grep -qE "PENDING|IN_PROGRESS"; then
-                echo "✅ CI checks passed" >&2
-                break
-            fi
+        # No checks configured - proceed
+        if [[ "$total_checks" -eq 0 ]]; then
+            echo "✅ No CI checks configured, proceeding" >&2
+            break
         fi
 
-        if echo "$checks_status" | grep -q "FAILURE"; then
-            echo "❌ CI checks failed, cannot merge" >&2
+        # Any failures - abort
+        if [[ "$failed_checks" -gt 0 ]]; then
+            echo "❌ CI checks failed ($failed_checks failed), cannot merge" >&2
             log_activity "CI checks failed for PR"
             return 1
         fi
 
+        # All passed - proceed
+        if [[ "$pending_checks" -eq 0 && "$success_checks" -eq "$total_checks" ]]; then
+            echo "✅ All CI checks passed ($success_checks/$total_checks)" >&2
+            break
+        fi
+
+        # Still pending - wait
+        echo "   Waiting... ${success_checks}/${total_checks} passed, ${pending_checks} pending (${waited}s/${max_wait}s)" >&2
         sleep $check_interval
         waited=$((waited + check_interval))
-        echo "   Waiting... (${waited}s/${max_wait}s)" >&2
     done
 
     if [[ $waited -ge $max_wait ]]; then
@@ -592,6 +603,8 @@ execute_agent() {
                 echo "🐛 [${agent_id}] Bugs found - will need developer fix"
                 log_activity "[${agent_id}] Bugs found"
                 agent_result=2
+                rm -f "$temp_stdout" "$temp_stderr"
+                break
             fi
         fi
 
@@ -607,6 +620,8 @@ execute_agent() {
                 echo "✅ [${agent_id}] PR approved for merge"
                 log_activity "[${agent_id}] Approved PR"
                 agent_result=0
+                rm -f "$temp_stdout" "$temp_stderr"
+                break
             fi
         fi
 

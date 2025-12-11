@@ -1,7 +1,8 @@
 # Continuous Claude - Project Index
 
-> **Version**: v0.14.0 (Core) + v2.0 (Multi-Agent System)
+> **Version**: v0.14.0 (Core) + v2.1 (Multi-Agent System)
 > **Last Updated**: 2025-12-10
+> **Total Lines**: ~8,300+ (Shell scripts)
 
 ---
 
@@ -88,7 +89,7 @@ Continuous Claude is an automated workflow tool that orchestrates Claude Code in
 | `worktrees.sh` | Git worktree isolation | `create_agent_worktree`, `cleanup_session_worktrees` |
 | `orchestrator.sh` | Swarm lifecycle control | `init_swarm`, `shutdown_swarm`, `process_agent_signal` |
 | `conflicts.sh` | Conflict detection/resolution | `detect_conflicts`, `resolve_conflict`, `acquire_lock` |
-| `coordination.sh` | High-level coordination API | `run_swarm`, `run_pipeline`, `run_parallel` |
+| `coordination.sh` | High-level coordination API | `run_swarm`, `run_agent_pipeline`, `execute_agent`, `log_activity` |
 | `learning.sh` | Failure capture & learning | `capture_failure`, `create_insight`, `inject_insights_into_prompt` |
 | `review.sh` | Automated code review | `review_pr`, `run_static_analysis`, `submit_pr_review` |
 | `dashboard.sh` | Dashboard server management | `start_dashboard`, `stop_dashboard`, `log_to_dashboard` |
@@ -108,14 +109,34 @@ Continuous Claude is an automated workflow tool that orchestrates Claude Code in
 ### Agent Communication Flow
 
 ```
-Developer ──────► Tester ──────► Reviewer
-    │                │               │
-    │  feature_      │  tests_       │  review_
-    │  complete      │  passed       │  approved
-    │                │               │
-    ◄────────────────┴───────────────┘
-         (feedback loop on failures)
+┌─────────────────────────────────────────────────────────────┐
+│                   Pipeline Workflow                          │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│   📋 Planner → 🧑‍💻 Developer → 🧪 Tester → 👁️ Reviewer     │
+│                    ↑              │           │             │
+│                    │    BUGS_FOUND│           │             │
+│                    └──────────────┘           │             │
+│                    ↑                          │             │
+│                    │  REVIEW_CHANGES_REQUESTED│             │
+│                    └──────────────────────────┘             │
+│                                               │             │
+│                                    REVIEW_APPROVED          │
+│                                               ↓             │
+│                                          PR Ready           │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
 ```
+
+### Agent Signals
+
+| Signal | Agent | Description |
+|--------|-------|-------------|
+| `AGENT_TASK_COMPLETE` | All | Agent finished current task |
+| `PROJECT_COMPLETE` | All | Entire project finished |
+| `BUGS_FOUND` | Tester | Tests failed, needs developer fix |
+| `REVIEW_APPROVED` | Reviewer | Code approved, PR ready for merge |
+| `REVIEW_CHANGES_REQUESTED` | Reviewer | Changes needed, back to developer |
 
 ### Message Types
 
@@ -185,13 +206,14 @@ Developer ──────► Tester ──────► Reviewer
 
 ### Available Personas (`personas/`)
 
-| Persona | Emoji | Role |
-|---------|-------|------|
-| **Developer** | 🧑‍💻 | Feature implementation, bug fixes, refactoring |
-| **Tester** | 🧪 | Test writing, coverage analysis, edge case testing |
-| **Reviewer** | 👁️ | Code review, quality gates, security audit |
-| **Documenter** | 📚 | Documentation, README updates, API docs |
-| **Security** | 🔒 | Security scanning, vulnerability fixes |
+| Persona | Emoji | Role | Next Phase |
+|---------|-------|------|------------|
+| **Planner** | 📋 | Requirements analysis, task breakdown | Developer |
+| **Developer** | 🧑‍💻 | Feature implementation, bug fixes | Tester |
+| **Tester** | 🧪 | Test writing, execution, coverage | Reviewer (pass) / Developer (fail) |
+| **Reviewer** | 👁️ | Code review, PR approval | Merge (approved) / Developer (changes) |
+| **Documenter** | 📚 | Documentation, README updates | - |
+| **Security** | 🔒 | Security scanning, vulnerability fixes | - |
 
 ### Persona Schema
 
@@ -325,7 +347,8 @@ log_to_dashboard "session" "info" "Message" "agent_id"
 ├── state/
 │   ├── session.json      # Current session info
 │   ├── agents.json       # Agent states
-│   └── tasks.json        # Task queue
+│   ├── tasks.json        # Task queue
+│   └── activity.log      # Real-time activity log (dashboard)
 ├── messages/
 │   ├── inbox/{agent}/    # Per-agent inbox
 │   └── outbox/pending/   # Outgoing messages

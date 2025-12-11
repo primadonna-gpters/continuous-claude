@@ -130,6 +130,71 @@ on_tests_complete() {
     fi
 }
 
+# Merge a PR
+# Usage: merge_pr <pr_url_or_number> [merge_method]
+# merge_method: merge, squash, rebase (default: squash)
+merge_pr() {
+    local pr="$1"
+    local merge_method="${2:-squash}"
+
+    if [[ -z "$pr" ]]; then
+        echo "❌ No PR specified" >&2
+        return 1
+    fi
+
+    if ! command -v gh &>/dev/null; then
+        echo "❌ GitHub CLI not available" >&2
+        return 1
+    fi
+
+    echo "🔀 Merging PR: $pr (method: $merge_method)..." >&2
+    log_activity "Merging PR: $pr"
+
+    # Wait for CI checks to pass (with timeout)
+    local max_wait=300  # 5 minutes
+    local waited=0
+    local check_interval=10
+
+    echo "⏳ Waiting for CI checks..." >&2
+    while [[ $waited -lt $max_wait ]]; do
+        local checks_status
+        checks_status=$(gh pr checks "$pr" --json state --jq '.[].state' 2>/dev/null | sort -u)
+
+        if [[ -z "$checks_status" ]] || echo "$checks_status" | grep -q "SUCCESS"; then
+            # No checks or all passed
+            if ! echo "$checks_status" | grep -qE "PENDING|IN_PROGRESS"; then
+                echo "✅ CI checks passed" >&2
+                break
+            fi
+        fi
+
+        if echo "$checks_status" | grep -q "FAILURE"; then
+            echo "❌ CI checks failed, cannot merge" >&2
+            log_activity "CI checks failed for PR"
+            return 1
+        fi
+
+        sleep $check_interval
+        waited=$((waited + check_interval))
+        echo "   Waiting... (${waited}s/${max_wait}s)" >&2
+    done
+
+    if [[ $waited -ge $max_wait ]]; then
+        echo "⚠️  CI check timeout, attempting merge anyway..." >&2
+    fi
+
+    # Attempt merge
+    if gh pr merge "$pr" --"$merge_method" --delete-branch 2>&1; then
+        echo "✅ PR merged successfully!" >&2
+        log_activity "PR merged successfully"
+        return 0
+    else
+        echo "❌ Failed to merge PR" >&2
+        log_activity "Failed to merge PR"
+        return 1
+    fi
+}
+
 # Handle reviewer decision
 # Usage: on_review_complete <approved|changes_requested> <comments_json> [pr_number]
 on_review_complete() {
@@ -141,8 +206,7 @@ on_review_complete() {
         echo "✅ Code approved!"
 
         if [[ "$AUTO_MERGE" == "true" && -n "$pr_number" ]]; then
-            echo "🔀 Auto-merging PR #${pr_number}..."
-            # TODO: Implement actual merge
+            merge_pr "$pr_number" "squash"
         fi
 
         process_agent_signal "reviewer" "review_approved" \
@@ -741,6 +805,26 @@ run_agent_pipeline() {
     # Mark PR ready for review ONLY after reviewer approves
     if [[ -n "$pr_url" && "$review_approved" == "true" ]]; then
         mark_pr_ready_for_review "$pr_url" "$prompt"
+
+        # Auto merge if enabled
+        if [[ "$AUTO_MERGE" == "true" ]]; then
+            echo ""
+            echo "═══════════════════════════════════════════════════════════════"
+            echo "  Phase 5: Auto Merge"
+            echo "═══════════════════════════════════════════════════════════════"
+            log_activity "Starting auto merge"
+
+            if merge_pr "$pr_url" "squash"; then
+                echo ""
+                echo "🎉 Pipeline completed successfully! PR merged."
+                log_activity "Pipeline completed - PR merged"
+                return 0
+            else
+                echo ""
+                echo "⚠️  Pipeline completed but merge failed. PR is ready for manual merge."
+                log_activity "Pipeline completed - merge failed"
+            fi
+        fi
     fi
 
     echo ""

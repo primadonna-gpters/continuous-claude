@@ -1238,6 +1238,78 @@ This PR is being worked on by Continuous Claude Swarm.
     fi
 }
 
+# Update PR progress after each agent completes
+# Usage: update_pr_progress <completed_agent_id>
+update_pr_progress() {
+    local completed_agent="$1"
+    local pr_url="${SWARM_PR_URL:-}"
+
+    if [[ -z "$pr_url" ]]; then
+        return 0  # No PR to update
+    fi
+
+    if ! command -v gh &>/dev/null; then
+        return 0
+    fi
+
+    # Build progress table based on agent states
+    local planner_status="⏳ Pending"
+    local developer_status="⏳ Pending"
+    local tester_status="⏳ Pending"
+    local reviewer_status="⏳ Pending"
+
+    # Get current agent states from state file
+    local state_file=".continuous-claude/state/agents.json"
+    if [[ -f "$state_file" ]]; then
+        local get_status
+        get_status() {
+            local agent="$1"
+            local status
+            status=$(jq -r --arg a "$agent" '.[$a].status // "pending"' "$state_file" 2>/dev/null)
+            case "$status" in
+                completed|complete) echo "✅ Done" ;;
+                running) echo "🔄 Running" ;;
+                *) echo "⏳ Pending" ;;
+            esac
+        }
+        planner_status=$(get_status "planner")
+        developer_status=$(get_status "developer")
+        tester_status=$(get_status "tester")
+        reviewer_status=$(get_status "reviewer")
+    fi
+
+    # Mark the just-completed agent
+    case "$completed_agent" in
+        planner) planner_status="✅ Done" ;;
+        developer) developer_status="✅ Done" ;;
+        tester) tester_status="✅ Done" ;;
+        reviewer) reviewer_status="✅ Done" ;;
+    esac
+
+    local pr_body="## 🚧 Work In Progress
+
+This PR is being worked on by Continuous Claude Swarm.
+
+**Session:** \`${SWARM_SESSION_ID}\`
+
+---
+
+### Progress
+
+| Phase | Agent | Status |
+|-------|-------|--------|
+| Planning | 📋 Planner | ${planner_status} |
+| Development | 🧑‍💻 Developer | ${developer_status} |
+| Testing | 🧪 Tester | ${tester_status} |
+| Review | 👁️ Reviewer | ${reviewer_status} |
+
+---
+🤖 Generated with [Continuous Claude](https://github.com/primadonna-gpters/continuous-claude)"
+
+    # Update PR body silently
+    gh pr edit "$pr_url" --body "$pr_body" >/dev/null 2>&1 || true
+}
+
 # Push agent changes after each phase
 # Usage: push_agent_changes <agent_id>
 push_agent_changes() {
@@ -1245,12 +1317,16 @@ push_agent_changes() {
 
     # Check if there are changes to push
     if git diff --quiet HEAD @{u} 2>/dev/null; then
-        return 0  # Nothing to push
+        # No changes to push, but still update PR progress
+        update_pr_progress "$agent_id"
+        return 0
     fi
 
     echo "📤 Pushing ${agent_id} changes..." >&2
     if git push 2>/dev/null; then
         echo "✅ Changes pushed" >&2
+        # Update PR progress after successful push
+        update_pr_progress "$agent_id"
         return 0
     else
         echo "⚠️  Failed to push changes" >&2

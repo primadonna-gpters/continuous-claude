@@ -1157,11 +1157,11 @@ ${prompt}
 
 Agents are working on this task...
 EOF
-    git add "$notes_file"
+    git add "$notes_file" >/dev/null 2>&1
     git commit -m "🚀 [swarm] Initialize task
 
 Session: ${SWARM_SESSION_ID}
-Task: ${prompt:0:60}" 2>/dev/null || true
+Task: ${prompt:0:60}" >/dev/null 2>&1 || true
 
     # Push the branch
     echo "📤 Pushing branch: ${branch_name}" >&2
